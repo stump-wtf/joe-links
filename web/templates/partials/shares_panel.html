@@ -1,6 +1,7 @@
 {{define "shares_panel"}}
-<!-- Governing: SPEC-0010 REQ "Share Management Panel on Link Detail" -->
-{{if eq .Link.Visibility "secure"}}
+<!-- Governing: SPEC-0010 REQ "Share Management Panel on Link Detail" — share
+     managers only; recipients never see the share roster or management form. -->
+{{if and .CanManage (eq .Link.Visibility "secure")}}
 <div id="shares-panel" class="card bg-base-200 shadow mt-4">
     <div class="card-body">
         <h2 class="card-title text-lg">Shared with</h2>

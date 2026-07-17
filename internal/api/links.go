@@ -37,6 +37,24 @@ func registerLinkRoutes(r chi.Router, links *store.LinkStore, ownership *store.O
 	r.Delete("/links/{id}/owners/{uid}", h.RemoveOwner)
 }
 
+// requireOwnerOrAdmin writes a 403 (or 500) and returns false unless the caller
+// may mutate the link: owner, co-owner, or admin. Share recipients are
+// read-only and never pass this gate.
+// Governing: SPEC-0002 REQ "Authorization Based on Ownership"
+// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
+func requireOwnerOrAdmin(w http.ResponseWriter, ownership *store.OwnershipStore, user *store.User, linkID string) bool {
+	allowed, err := store.IsOwnerOrAdmin(ownership, linkID, user.ID, user.Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		return false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+		return false
+	}
+	return true
+}
+
 // List returns owned links for regular users, or all links for admins.
 // GET /api/v1/links
 // Governing: SPEC-0005 REQ "Links Collection"
@@ -224,12 +242,13 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, lr)
 }
 
-// Get returns a single link by ID. Owners and admins only.
+// Get returns a single link by ID. Owners, share recipients, and admins.
 // GET /api/v1/links/{id}
 // Governing: SPEC-0005 REQ "Link Resource"
+// Governing: SPEC-0010 REQ "REST API Visibility Field"
 //
 // @Summary      Get a link
-// @Description  Returns a single link by ID. Only owners and admins may access.
+// @Description  Returns a single link by ID. Owners, share recipients, and admins may access.
 // @Tags         Links
 // @Accept       json
 // @Produce      json
@@ -260,23 +279,14 @@ func (h *linksAPIHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Governing: SPEC-0010 REQ "REST API Visibility Field" — owners, shared users, and admins may access
-	if user.Role != "admin" {
-		isOwner, err := h.ownership.IsOwner(link.ID, user.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
-		if !isOwner {
-			hasShare, err := h.links.HasShare(r.Context(), link.ID, user.ID)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-				return
-			}
-			if !hasShare {
-				writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
-				return
-			}
-		}
+	caps, err := store.LinkCapsFor(r.Context(), h.ownership, h.links, link.ID, user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		return
+	}
+	if !caps.CanView {
+		writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+		return
 	}
 
 	lr, err := h.toLinkResponse(r.Context(), link)
@@ -325,16 +335,8 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
-		isOwner, err := h.ownership.IsOwner(link.ID, user.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
-		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
-			return
-		}
+	if !requireOwnerOrAdmin(w, h.ownership, user, link.ID) {
+		return
 	}
 
 	var req UpdateLinkRequest
@@ -426,16 +428,8 @@ func (h *linksAPIHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
-		isOwner, err := h.ownership.IsOwner(link.ID, user.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
-		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
-			return
-		}
+	if !requireOwnerOrAdmin(w, h.ownership, user, link.ID) {
+		return
 	}
 
 	if err := h.links.Delete(r.Context(), link.ID); err != nil {
@@ -481,16 +475,8 @@ func (h *linksAPIHandler) ListOwners(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
-		isOwner, err := h.ownership.IsOwner(link.ID, user.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
-		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
-			return
-		}
+	if !requireOwnerOrAdmin(w, h.ownership, user, link.ID) {
+		return
 	}
 
 	owners, err := h.ownership.ListOwnerUsers(link.ID)
@@ -549,16 +535,8 @@ func (h *linksAPIHandler) AddOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
-		isOwner, err := h.ownership.IsOwner(link.ID, user.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
-		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
-			return
-		}
+	if !requireOwnerOrAdmin(w, h.ownership, user, link.ID) {
+		return
 	}
 
 	var req AddOwnerRequest
@@ -634,16 +612,8 @@ func (h *linksAPIHandler) RemoveOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
-		isOwner, err := h.ownership.IsOwner(link.ID, user.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
-		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
-			return
-		}
+	if !requireOwnerOrAdmin(w, h.ownership, user, link.ID) {
+		return
 	}
 
 	ownerUID := chi.URLParam(r, "uid")

@@ -38,18 +38,33 @@ func TestLinkRowRenders_AdminAndDashboard(t *testing.T) {
 		wantHrefs []string
 	}{
 		{"admin", "/admin/links/1/row", []string{"/admin/links/", "/admin/links/" + link.ID + "/confirm-delete"}},
-		{"dashboard", "/dashboard", []string{"/dashboard/links/" + link.ID + "/stats", "/dashboard/links/" + link.ID + "/confirm-delete"}},
+		{"dashboard", "/dashboard", []string{"/dashboard/links/" + link.ID, "/dashboard/links/" + link.ID + "/stats", "/dashboard/links/" + link.ID + "/confirm-delete"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest("GET", tc.path, nil)
-			ctx := AdminLinksPage{
+			// Governing: SPEC-0010 — non-admin rows read per-row capabilities
+			// from RowCaps, so the dashboard case uses DashboardPage.
+			var ctx any = AdminLinksPage{
 				BasePage:       newBasePage(r, nil),
 				ShowTitle:      true,
 				ShowOwner:      true,
 				ShowTags:       true,
 				ShowVisibility: true,
 				ShowActions:    true,
+			}
+			if tc.name == "dashboard" {
+				ctx = DashboardPage{
+					BasePage:       newBasePage(r, nil),
+					ShowTitle:      true,
+					ShowOwner:      true,
+					ShowTags:       true,
+					ShowVisibility: true,
+					ShowActions:    true,
+					RowCaps: map[string]store.LinkCaps{
+						link.ID: store.NewLinkCaps(true, false, false),
+					},
+				}
 			}
 			rr := httptest.NewRecorder()
 			renderFragment(rr, "link_row", map[string]any{"Link": link, "Ctx": ctx})
@@ -209,6 +224,8 @@ func TestDashboardLinkListRenders_StoreLink(t *testing.T) {
 		BasePage:    newBasePage(r, nil),
 		Links:       []*store.Link{l},
 		ShowActions: true, // matches DashboardHandler.Show; all other Show* false
+		// Governing: SPEC-0010 — owner rows get full per-row capabilities
+		RowCaps: map[string]store.LinkCaps{l.ID: store.NewLinkCaps(true, false, false)},
 	}
 	rr := httptest.NewRecorder()
 	renderFragment(rr, "link_list", data)

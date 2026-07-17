@@ -14,12 +14,13 @@ import (
 type TagsHandler struct {
 	tags     *store.TagStore
 	links    *store.LinkStore
+	owns     *store.OwnershipStore
 	keywords *store.KeywordStore
 }
 
 // NewTagsHandler creates a new TagsHandler.
-func NewTagsHandler(ts *store.TagStore, ls *store.LinkStore, ks *store.KeywordStore) *TagsHandler {
-	return &TagsHandler{tags: ts, links: ls, keywords: ks}
+func NewTagsHandler(ts *store.TagStore, ls *store.LinkStore, os *store.OwnershipStore, ks *store.KeywordStore) *TagsHandler {
+	return &TagsHandler{tags: ts, links: ls, owns: os, keywords: ks}
 }
 
 // TagIndexPage is the template data for the tag browser.
@@ -39,6 +40,10 @@ type TagDetailPage struct {
 	ShowTitle      bool
 	ShowOwner      bool
 	ShowTags       bool
+	// RowCaps maps link ID → the viewer's capabilities for that row; tag lists
+	// show all visible links, and visible ≠ editable.
+	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
+	RowCaps map[string]store.LinkCaps
 }
 
 // visibleUserID returns the user's ID, or "" for anonymous viewers so
@@ -100,6 +105,15 @@ func (h *TagsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Per-row capabilities: tag lists include links the viewer can see but not
+	// act on (e.g. other users' public links), so action buttons render per row.
+	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — visible ≠ editable
+	rowCaps, err := buildRowCaps(r.Context(), h.owns, h.links, user, links)
+	if err != nil {
+		http.Error(w, "could not load links", http.StatusInternalServerError)
+		return
+	}
+
 	data := TagDetailPage{
 		BasePage:       newBasePage(r, user),
 		Tag:            tag,
@@ -109,6 +123,7 @@ func (h *TagsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		ShowTitle:      true,
 		ShowOwner:      false,
 		ShowTags:       false,
+		RowCaps:        rowCaps,
 	}
 	if isHTMX(r) {
 		renderPageFragment(w, "tags/detail.html", "content", data)

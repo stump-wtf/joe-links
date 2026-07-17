@@ -8,10 +8,16 @@
         <h1 class="text-2xl font-bold font-mono">{{.Link.Slug}}</h1>
         <div class="flex gap-2">
             <a href="/dashboard/links/{{.Link.ID}}/stats" class="btn btn-sm btn-ghost">Stats</a>
+            <!-- Governing: SPEC-0010 REQ "Link Shares Table" — mutating controls are
+                 capability-gated; share recipients view the page read-only. -->
+            {{if .CanEdit}}
             <a href="/dashboard/links/{{.Link.ID}}/edit" class="btn btn-sm btn-primary">Edit</a>
+            {{end}}
+            {{if .CanDelete}}
             <!-- Governing: SPEC-0004 REQ "Delete Link" — DaisyUI confirm modal (inline) -->
             <button class="btn btn-sm btn-error btn-outline"
                     onclick="document.getElementById('confirm-delete-modal').showModal()">Delete</button>
+            {{end}}
         </div>
     </div>
 
@@ -68,9 +74,11 @@
     </div>
 </div>
 
-<!-- Governing: SPEC-0010 REQ "Share Management Panel on Link Detail" -->
+<!-- Governing: SPEC-0010 REQ "Share Management Panel on Link Detail" — share
+     managers only; recipients must not see who else has access. -->
 {{template "shares_panel" .}}
 
+{{if .CanDelete}}
 <!-- Governing: SPEC-0004 REQ "Delete Link" — confirm modal using DaisyUI dialog -->
 <dialog id="confirm-delete-modal" class="modal">
     <div class="modal-box">
@@ -91,5 +99,6 @@
     </div>
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
+{{end}}
 {{end}}
 {{end}}

@@ -588,3 +588,56 @@ func TestClicks_NotFound(t *testing.T) {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
+
+// Clicker attribution is manager-only: recipients read clicks but never the
+// user field — on a secure link the authenticated-clicker set would proxy the
+// hidden share roster. Owners keep attribution. See PR #255 security review.
+func TestClicks_RecipientGetsNoUserAttribution(t *testing.T) {
+	env := newTestEnv(t)
+	owner := seedUser(t, env, "attr-owner@example.com", "user")
+	recipient := seedUser(t, env, "attr-recipient@example.com", "user")
+	ownerToken := seedToken(t, env, owner.ID)
+	recipientToken := seedToken(t, env, recipient.ID)
+	ctx := context.Background()
+
+	link, err := env.LinkStore.Create(ctx, "attr-link", "https://example.com", owner.ID, "Attr", "", "secure")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := env.LinkStore.AddShare(ctx, link.ID, recipient.ID, owner.ID); err != nil {
+		t.Fatalf("add share: %v", err)
+	}
+	if err := env.ClickStore.RecordClick(ctx, store.ClickEvent{
+		LinkID: link.ID, UserID: owner.ID, IPHash: "h1", UserAgent: "Test/1",
+	}); err != nil {
+		t.Fatalf("record click: %v", err)
+	}
+
+	get := func(token string) map[string]any {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/links/"+link.ID+"/clicks", nil)
+		authRequest(req, token)
+		rec := httptest.NewRecorder()
+		env.Router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return body
+	}
+
+	ownerClicks := get(ownerToken)["clicks"].([]any)
+	if len(ownerClicks) != 1 || ownerClicks[0].(map[string]any)["user"] == nil {
+		t.Errorf("owner should see clicker attribution, got %v", ownerClicks)
+	}
+	recClicks := get(recipientToken)["clicks"].([]any)
+	if len(recClicks) != 1 {
+		t.Fatalf("recipient should see the click row, got %v", recClicks)
+	}
+	if recClicks[0].(map[string]any)["user"] != nil {
+		t.Errorf("recipient must not see clicker attribution, got %v", recClicks[0])
+	}
+}

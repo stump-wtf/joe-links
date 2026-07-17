@@ -68,16 +68,17 @@ func (h *statsAPIHandler) GetStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
-		isOwner, err := h.owns.IsOwner(link.ID, user.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
-		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
-			return
-		}
+	// Owners/co-owners/admins and share recipients may read stats.
+	// Governing: SPEC-0016 REQ "REST API Stats Endpoint"
+	// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
+	caps, err := store.LinkCapsFor(r.Context(), h.owns, h.links, link.ID, user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		return
+	}
+	if !caps.CanStats {
+		writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+		return
 	}
 
 	stats, err := h.clicks.GetClickStats(r.Context(), link.ID)
@@ -115,16 +116,17 @@ func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
-		isOwner, err := h.owns.IsOwner(link.ID, user.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
-		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
-			return
-		}
+	// Same read matrix as GetStats: recipients may read clicks too.
+	// Governing: SPEC-0016 REQ "REST API Clicks Endpoint"
+	// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
+	caps, err := store.LinkCapsFor(r.Context(), h.owns, h.links, link.ID, user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		return
+	}
+	if !caps.CanStats {
+		writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+		return
 	}
 
 	// Parse limit (default 50, max 200).
@@ -179,7 +181,11 @@ func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 			ref := rc.Referrer
 			cr.Referrer = &ref
 		}
-		if rc.UserID != "" {
+		// Clicker attribution is manager-only: for a secure link the set of
+		// authenticated clickers is a proxy for the share roster, which
+		// recipients deliberately cannot see. See PR #255 security review.
+		// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
+		if rc.UserID != "" && caps.CanManageShares {
 			cr.User = &clickUserRef{
 				ID:          rc.UserID,
 				DisplayName: rc.DisplayName,

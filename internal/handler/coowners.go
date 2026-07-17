@@ -97,7 +97,10 @@ func (h *LinksHandler) RemoveOwner(w http.ResponseWriter, r *http.Request) {
 }
 
 // Detail handles GET /dashboard/links/{id}.
+// Share recipients may view the page read-only; owners/co-owners/admins get
+// the full management controls.
 // Governing: SPEC-0004 REQ "Link Detail View"
+// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
 func (h *LinksHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	id := chi.URLParam(r, "id")
@@ -106,13 +109,13 @@ func (h *LinksHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
+	caps, err := store.LinkCapsFor(r.Context(), h.owns, h.links, link.ID, user)
 	if err != nil {
-		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		log.Printf("capability check failed for link %s user %s: %v", link.ID, user.ID, err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	if !allowed {
+	if !caps.CanView {
 		RenderForbidden(w, r)
 		return
 	}
@@ -121,8 +124,9 @@ func (h *LinksHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	owners, _ := h.owns.ListOwnerUsers(link.ID)
 
 	// Governing: SPEC-0010 REQ "Share Management Panel on Link Detail"
+	// — the share list is visible to share managers only, never to recipients.
 	var shares []ShareUser
-	if link.Visibility == "secure" {
+	if link.Visibility == "secure" && caps.CanManageShares {
 		shareRecords, _ := h.links.ListShares(r.Context(), link.ID)
 		for _, sr := range shareRecords {
 			u, err := h.users.GetByID(r.Context(), sr.UserID)
@@ -138,12 +142,15 @@ func (h *LinksHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := LinkDetailPage{
-		BasePage: newBasePage(r, user),
-		User:     user,
-		Link:     link,
-		Tags:     tags,
-		Owners:   owners,
-		Shares:   shares,
+		BasePage:  newBasePage(r, user),
+		User:      user,
+		Link:      link,
+		Tags:      tags,
+		Owners:    owners,
+		Shares:    shares,
+		CanEdit:   caps.CanEdit,
+		CanDelete: caps.CanDelete,
+		CanManage: caps.CanManageShares,
 	}
 	if isHTMX(r) {
 		renderPageFragment(w, "links/detail.html", "content", data)
@@ -172,24 +179,27 @@ func (h *LinksHandler) ValidateSlug(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`<span class="text-success text-xs">Available!</span>`))
 }
 
-// renderOwnersFragment re-renders the owners list for HTMX swap.
+// renderOwnersFragment re-renders the owners list for HTMX swap. Only
+// owner/admin callers reach this (AddOwner/RemoveOwner already authorized),
+// so the fragment always renders the management controls.
 func (h *LinksHandler) renderOwnersFragment(w http.ResponseWriter, link *store.Link) {
 	owners, _ := h.owns.ListOwnerUsers(link.ID)
 	w.Header().Set("Content-Type", "text/html")
-	renderFragment(w, "owners_list", &ownersFragmentData{Link: link, Owners: owners})
+	renderFragment(w, "owners_list", &ownersFragmentData{Link: link, Owners: owners, CanManage: true})
 }
 
 // renderOwnersError renders owners fragment with an error message.
 func (h *LinksHandler) renderOwnersError(w http.ResponseWriter, r *http.Request, link *store.Link, user *store.User, errMsg string) {
 	owners, _ := h.owns.ListOwnerUsers(link.ID)
 	w.Header().Set("Content-Type", "text/html")
-	renderFragment(w, "owners_list", &ownersFragmentData{Link: link, Owners: owners, Error: errMsg})
+	renderFragment(w, "owners_list", &ownersFragmentData{Link: link, Owners: owners, Error: errMsg, CanManage: true})
 }
 
 type ownersFragmentData struct {
-	Link   *store.Link
-	Owners []*store.OwnerInfo
-	Error  string
+	Link      *store.Link
+	Owners    []*store.OwnerInfo
+	Error     string
+	CanManage bool // gate add/remove controls; recipients see a read-only list
 }
 
 // AddShare handles POST /dashboard/links/{id}/shares.
@@ -272,21 +282,23 @@ func (h *LinksHandler) RemoveShare(w http.ResponseWriter, r *http.Request) {
 
 // sharesFragmentData holds template data for the shares panel HTMX fragment.
 type sharesFragmentData struct {
-	Link   *store.Link
-	Shares []ShareUser
-	Error  string
+	Link      *store.Link
+	Shares    []ShareUser
+	Error     string
+	CanManage bool // gate the panel; only share managers ever see it
 }
 
-// renderSharesFragment re-renders the shares panel for HTMX swap.
+// renderSharesFragment re-renders the shares panel for HTMX swap. Only
+// owner/admin callers reach this (AddShare/RemoveShare already authorized).
 func (h *LinksHandler) renderSharesFragment(w http.ResponseWriter, r *http.Request, link *store.Link) {
 	shares := h.loadShares(r, link)
-	renderFragment(w, "shares_panel", &sharesFragmentData{Link: link, Shares: shares})
+	renderFragment(w, "shares_panel", &sharesFragmentData{Link: link, Shares: shares, CanManage: true})
 }
 
 // renderSharesError renders shares panel with an inline validation error.
 func (h *LinksHandler) renderSharesError(w http.ResponseWriter, r *http.Request, link *store.Link, errMsg string) {
 	shares := h.loadShares(r, link)
-	renderFragment(w, "shares_panel", &sharesFragmentData{Link: link, Shares: shares, Error: errMsg})
+	renderFragment(w, "shares_panel", &sharesFragmentData{Link: link, Shares: shares, Error: errMsg, CanManage: true})
 }
 
 // loadShares resolves share records to ShareUser display objects.
