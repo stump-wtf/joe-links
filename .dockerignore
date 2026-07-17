@@ -24,7 +24,6 @@ docs/openspec
 
 # Integrations (browser/Safari extensions — not part of the server image)
 integrations
-safari-extension
 
 # Local dev, databases, secrets
 dev

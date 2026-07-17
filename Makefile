@@ -39,16 +39,11 @@ docker-up:
 docker-down:
 	docker compose down
 
-# Convert the Web Extension to a Safari extension Xcode project.
-# Requires Xcode command-line tools: xcode-select --install
-# After running, open safari-extension/*.xcodeproj, build (Cmd+B), then
-# enable the extension in Safari → Settings → Extensions.
+# Open the committed Safari extension Xcode project. It references the Web
+# Extension source at integrations/extension/ directly, so there is no
+# safari-web-extension-converter step — build in Xcode (Cmd+B), then enable
+# the extension in Safari → Settings → Extensions.
 ext-safari:
-	xcrun safari-web-extension-converter extension/ \
-		--app-name "joe-links" \
-		--bundle-identifier "com.joestump.joe-links" \
-		--swift \
-		--no-prompt \
-		--project-location safari-extension/
+	open integrations/apple/joe-links.xcodeproj
 
 .DEFAULT_GOAL := build
