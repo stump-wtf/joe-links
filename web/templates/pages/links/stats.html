@@ -45,7 +45,11 @@
                     <tbody>
                         {{range .RecentClicks}}
                         <tr>
-                            <td class="whitespace-nowrap">{{.ClickedAt.Format "Jan 2, 2006 3:04 PM UTC"}}</td>
+                            {{/* Convert to UTC before formatting so the label is truthful
+                                 regardless of the driver's time.Time zone; the title carries
+                                 the RFC 3339 form (issue #206). Local-timezone rendering is
+                                 deferred to epic #216. */}}
+                            <td class="whitespace-nowrap" title="{{.ClickedAt.UTC.Format "2006-01-02T15:04:05Z07:00"}}">{{.ClickedAt.UTC.Format "Jan 2, 2006 3:04 PM"}} UTC</td>
                             <td class="truncate max-w-xs">{{if .Referrer}}{{.Referrer}}{{else}}<span class="text-base-content/40">direct</span>{{end}}</td>
                             {{if $.ShowClickers}}<td>{{if .DisplayName}}{{.DisplayName}}{{else}}<span class="text-base-content/40">anonymous</span>{{end}}</td>{{end}}
                         </tr>

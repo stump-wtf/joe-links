@@ -67,6 +67,13 @@ func newBasePage(r *http.Request, user *store.User) BasePage {
 	if len(commit) > 7 {
 		commit = commit[:7]
 	}
+	// CI stamps BRANCH with the tag name on tag builds, so the footer tooltip
+	// read "v0.5.3 · v0.5.3 · <sha>". Drop the branch segment when it merely
+	// repeats the version (issue #206).
+	branch := build.Branch
+	if branch == build.Version {
+		branch = ""
+	}
 	shortKeyword := configuredShortKeyword
 	if shortKeyword == "" {
 		host := r.Host
@@ -83,7 +90,7 @@ func newBasePage(r *http.Request, user *store.User) BasePage {
 		ShortKeyword: shortKeyword,
 		BuildVersion: build.Version,
 		BuildCommit:  commit,
-		BuildBranch:  build.Branch,
+		BuildBranch:  branch,
 	}
 }
 
