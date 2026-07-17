@@ -38,7 +38,7 @@ The application MUST maintain a `links` table with at minimum the following colu
 
 ### Requirement: Slug Uniqueness and Format Validation
 
-Slugs MUST be globally unique across all links. A slug MUST match the pattern `[a-z0-9][a-z0-9\-]*[a-z0-9]` (lowercase alphanumeric and hyphens, not starting or ending with a hyphen) OR be a single character matching `[a-z0-9]`. Slug uniqueness MUST be enforced at both the application layer (to produce user-friendly errors) and the database layer (unique index). The following slugs are RESERVED and MUST NOT be accepted: `auth`, `static`, `dashboard`, `admin`.
+Slugs MUST be globally unique across all links. A slug MUST match the pattern `[a-z0-9][a-z0-9\-]*[a-z0-9]` (lowercase alphanumeric and hyphens, not starting or ending with a hyphen) OR be a single character matching `[a-z0-9]`. Slug uniqueness MUST be enforced at both the application layer (to produce user-friendly errors) and the database layer (unique index). The following slugs are RESERVED (exact match only — dash-prefixed slugs such as `u-foo` or `links-roundup` are valid) and MUST NOT be accepted: `admin`, `api`, `auth`, `dashboard`, `links`, `mcp`, `metrics`, `static`, `u`. The single source of truth for the reserved set is `store.ReservedSlugs()` in `internal/store/validate.go`; every entry corresponds to a top-level route.
 
 #### Scenario: Valid Slug Accepted
 
@@ -62,7 +62,7 @@ Slugs MUST be globally unique across all links. A slug MUST match the pattern `[
 
 #### Scenario: Reserved Slug Rejected
 
-- **WHEN** a user submits a reserved slug (`auth`, `static`, `dashboard`, or `admin`)
+- **WHEN** a user submits a reserved slug (any exact match in `store.ReservedSlugs()`, e.g. `auth`, `api`, `links`, `u`)
 - **THEN** the application MUST return a validation error identifying the slug as reserved
 
 #### Scenario: Slug Immutable After Creation
@@ -183,7 +183,7 @@ The application MUST maintain a `link_tags` join table with columns: `link_id` (
 
 ### Requirement: Link Store Interface
 
-The application MUST expose all link data operations through a `LinkStore` interface in `internal/store/`. No handler or service MUST query the database directly. The interface MUST include at minimum: `Create`, `GetBySlug`, `GetByID`, `ListByOwner`, `Update`, `Delete`, `AddOwner`, `RemoveOwner`, `SetTags`, `ListTags`, `ListByTag`.
+The application MUST expose all link data operations through the concrete `*LinkStore` and `*TagStore` types in `internal/store/` (the earlier Go interface abstractions were removed in favor of concrete types — PR #263; there is a single implementation per backend-agnostic store). No handler or service MUST query the database directly. The link store MUST provide at minimum: `Create`, `GetBySlug`, `GetByID`, `ListByOwner`, `Update`, `Delete`, `AddOwner`, `RemoveOwner`, `SetTags`, `ListTags`, `ListByTag`.
 
 #### Scenario: GetBySlug Returns Link with Owners and Tags
 

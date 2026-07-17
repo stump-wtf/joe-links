@@ -318,11 +318,11 @@ Owner display names on the expired page, destination URLs and error strings on t
 
 ## Deferred Reciprocal Amendments
 
-This spec intentionally narrows normative statements in three accepted specs. The carve-outs are normative here — on conflict, this spec wins — and each older spec owes a reciprocal one-line amendment, deferred to the docs consolidation PR, which MUST apply all three:
+This spec intentionally narrows normative statements in three accepted specs. The carve-outs are normative here — on conflict, this spec wins. Each older spec owed a reciprocal amendment; all three were applied by the docs consolidation PR (epic #213):
 
-- **SPEC-0012 (User Profiles and Public Link Browsing).** SPEC-0012 currently mandates that the public browser display **all** links with `visibility = 'public'` and that profile pages list a user's public links. Carve-out: expired and archived links MUST be excluded from both surfaces (REQ "Health Badges and Admin Report"; Security "Resolution Ordering"). Deferred amendment: qualify both SPEC-0012 sentences with "excluding expired and archived links (SPEC-0020)".
-- **SPEC-0004 (Application Views and Routing).** SPEC-0004 unconditionally mandates the "Create it now" CTA on the 404 page. Carve-out: the CTA MUST be suppressed for slugs reserved by expired or archived links (REQ "Expired Link Resolution", REQ "Archived Link Resolution"). Deferred amendment: except lifecycle-reserved slugs in SPEC-0004's REQ "Slug Resolver and 404 Page".
-- **SPEC-0019 (Search & Discovery).** SPEC-0019's candidate-set REQs enumerate visibility filters only. Carve-out: the suggest endpoint and 404 did-you-mean candidates MUST additionally exclude expired and archived links for all callers (REQ "Health Badges and Admin Report"). Deferred amendment: add the lifecycle predicate to SPEC-0019's candidate-set REQs alongside the visibility filters.
+- **SPEC-0012 (User Profiles and Public Link Browsing).** SPEC-0012 currently mandates that the public browser display **all** links with `visibility = 'public'` and that profile pages list a user's public links. Carve-out: expired and archived links MUST be excluded from both surfaces (REQ "Health Badges and Admin Report"; Security "Resolution Ordering"). Applied amendment: qualify both SPEC-0012 sentences with "excluding expired and archived links (SPEC-0020)".
+- **SPEC-0004 (Application Views and Routing).** SPEC-0004 unconditionally mandates the "Create it now" CTA on the 404 page. Carve-out: the CTA MUST be suppressed for slugs reserved by expired or archived links (REQ "Expired Link Resolution", REQ "Archived Link Resolution"). Applied amendment: except lifecycle-reserved slugs in SPEC-0004's REQ "Slug Resolver and 404 Page".
+- **SPEC-0019 (Search & Discovery).** SPEC-0019's candidate-set REQs enumerate visibility filters only. Carve-out: the suggest endpoint and 404 did-you-mean candidates MUST additionally exclude expired and archived links for all callers (REQ "Health Badges and Admin Report"). Applied amendment: add the lifecycle predicate to SPEC-0019's candidate-set REQs alongside the visibility filters.
 
 ---
 

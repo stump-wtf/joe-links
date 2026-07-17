@@ -58,12 +58,12 @@ The HTTP server MUST be implemented in Go using a `net/http`-compatible router. 
 
 ### Requirement: Short Link Resolution
 
-This is the core feature. The application MUST resolve short link slugs by redirecting the browser to the target URL. A request to `/{slug}` MUST look up the slug in the database and issue a `302 Found` redirect to the stored URL. The following path prefixes MUST be reserved and MUST NOT be valid slugs: `auth`, `static`, `dashboard`, `admin`. If a slug is not found, the application MUST return a friendly 404 page.
+This is the core feature. The application MUST resolve short link slugs by redirecting the browser to the target URL. A request to `/{slug}` MUST look up the slug in the database and issue a `302 Found` redirect to the stored URL. The following slugs are reserved (exact match — dash-prefixed slugs like `links-roundup` remain valid) and MUST NOT be valid slugs: `admin`, `api`, `auth`, `dashboard`, `links`, `mcp`, `metrics`, `static`, `u`. The single source of truth for this list is `store.ReservedSlugs()` in `internal/store/validate.go`. If a slug is not found, the application MUST return a friendly 404 page. `HEAD` requests MUST behave identically to `GET` for resolution (same status code and `Location` header) with no response body and no click recording (SPEC-0016).
 
 #### Scenario: Valid Slug
 
-- **WHEN** a request arrives at `/{slug}` and the slug exists in the database
-- **THEN** the server MUST respond with `302 Found` and a `Location` header pointing to the stored URL
+- **WHEN** a request arrives at `/{slug}`, the slug exists in the database, and the link's URL contains no variable placeholders (SPEC-0009)
+- **THEN** the server MUST respond with `302 Found` and a `Location` header pointing to the stored URL. A bare-slug visit to a variable link is an arity mismatch and MUST 404 instead (ADR-0013, SPEC-0009)
 
 #### Scenario: Unknown Slug
 
@@ -150,6 +150,17 @@ The application UI MUST use Tailwind CSS for utility-class styling and DaisyUI a
 
 ---
 
+### Requirement: CSS Freshness in CI
+
+The committed compiled stylesheet (`web/static/css/app.css`) MUST match what the pinned Tailwind/DaisyUI toolchain produces from the templates and configuration. The project's CI MUST include a step that rebuilds the CSS and verifies the output matches the committed file, failing with a message indicating the CSS needs to be regenerated. This mirrors SPEC-0007 REQ "Spec Freshness in CI" for the swagger artifacts.
+
+#### Scenario: Stale Committed CSS Fails CI
+
+- **WHEN** a template or Tailwind configuration change alters the compiled CSS but the committed `web/static/css/app.css` is not regenerated
+- **THEN** the CI check MUST fail, indicating the CSS must be rebuilt and committed
+
+---
+
 ### Requirement: Pluggable Database Backend
 
 The application MUST support SQLite, MariaDB, and PostgreSQL. The active backend MUST be selected at runtime via `JOE_DB_DRIVER` (values: `sqlite3`, `mysql`, `postgres`). The connection string MUST be provided via `JOE_DB_DSN`. The application MUST NOT hardcode database-specific SQL outside of migration files.
@@ -220,7 +231,7 @@ The application MUST use OIDC as the sole authentication mechanism. Username/pas
 
 ### Requirement: Local User Records
 
-The application MUST maintain a `users` table with at minimum: `id`, `provider`, `subject`, `email`, `display_name`, `role`, `created_at`, `updated_at`. Records are keyed on `(provider, subject)`. On authentication, the record MUST be upserted. During new user creation, if the authenticated email matches `JOE_ADMIN_EMAIL`, the user MUST be created with role `admin`; otherwise the default role is `user`. On subsequent logins, the stored `role` MUST be preserved.
+The application MUST maintain a `users` table with at minimum: `id`, `provider`, `subject`, `email`, `display_name`, `role`, `created_at`, `updated_at`. Records are keyed on `(provider, subject)`. On authentication, the record MUST be upserted. Env-driven admin configuration is grant-only and applies on EVERY login, not just the first: if the authenticated email matches `JOE_ADMIN_EMAIL`, or the token's groups claim (name per `JOE_OIDC_GROUPS_CLAIM`, default `groups`) intersects `JOE_OIDC_ADMIN_GROUPS`, the user MUST hold role `admin` after that login — including a user previously demoted via the admin UI. Env grants never demote: a user matching no grant keeps their stored `role`. Explicit demotion is possible only through the admin UI/API, and lasts only until the next login for env-matching users. (Grant-only-on-any-login semantics per PR #239; see also `joe-links-web-app/design.md`.)
 
 #### Scenario: New User — Default Role
 
@@ -234,8 +245,13 @@ The application MUST maintain a `users` table with at minimum: `id`, `provider`,
 
 #### Scenario: Returning User
 
-- **WHEN** a matching `(provider, subject)` record exists
-- **THEN** `email` and `display_name` MUST be updated from OIDC claims; `role` MUST be preserved
+- **WHEN** a matching `(provider, subject)` record exists and the user matches no env grant
+- **THEN** `email` and `display_name` MUST be updated from OIDC claims; the stored `role` MUST be preserved
+
+#### Scenario: Env-Granted User Re-Promoted After UI Demotion
+
+- **WHEN** a user whose email matches `JOE_ADMIN_EMAIL` was demoted to `user` via the admin UI and then logs in again
+- **THEN** the record MUST hold role `admin` after login (env grants apply on every login and never demote)
 
 ---
 

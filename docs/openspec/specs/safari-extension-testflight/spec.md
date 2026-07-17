@@ -179,8 +179,11 @@ jobs if it fails.
 
 When changes are made to the `integrations/extension/` directory that affect `manifest.json` or add new
 source files, the Xcode project under `integrations/apple/` MUST be updated to reference the new files.
-The CI pipeline MUST verify that the Xcode project builds successfully; a build failure in
-the `safari` job MUST surface as a failed CI check on the pull request.
+The CI pipeline MUST verify that the Xcode project builds successfully; a build failure MUST surface
+as a failed CI check on the pull request via the paths-gated, credential-free unsigned `xcode-build`
+job (`CODE_SIGNING_ALLOWED=NO`, gated to changes under `integrations/apple/**` and
+`integrations/extension/**`). The `safari` job cannot serve this role — per REQ "CI Job Integration"
+it runs only on tag pushes and remains the signed, tag-time pipeline.
 
 #### Scenario: New extension file added
 
@@ -190,4 +193,4 @@ the `safari` job MUST surface as a failed CI check on the pull request.
 #### Scenario: Xcode build failure blocks merge
 
 - **WHEN** a pull request introduces a change that causes the Xcode build to fail
-- **THEN** the `safari` CI job fails and the pull request shows a failed check, preventing merge until the build is fixed
+- **THEN** the unsigned `xcode-build` CI job fails and the pull request shows a failed check, preventing merge until the build is fixed

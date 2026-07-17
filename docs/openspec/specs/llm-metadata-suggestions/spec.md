@@ -20,6 +20,8 @@ The following environment variables MUST be supported:
 | `JOE_LLM_BASE_URL` | *(provider default)* | Base URL override for Ollama or any OpenAI-compatible endpoint |
 | `JOE_LLM_PROMPT` | *(built-in default)* | Override the system prompt sent to the LLM |
 
+**Planned (not yet implemented)**: a `JOE_LLM_TIMEOUT` setting (default idea: 15s, matching the current fixed suggest deadline in `internal/llm/`) so that slow local Ollama/custom endpoints have an escape hatch from the fixed timeout. When implemented it should be wired through viper (`llm.timeout`) in `internal/config/` and added to the root `CLAUDE.md` env-var table.
+
 #### Scenario: Feature disabled by default
 
 - **WHEN** `JOE_LLM_PROVIDER` is not set

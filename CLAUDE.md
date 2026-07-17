@@ -30,11 +30,16 @@ Go + HTMX + DaisyUI/Tailwind. Single binary.
 | `JOE_OIDC_CLIENT_ID` | — | OAuth2 client ID |
 | `JOE_OIDC_CLIENT_SECRET` | — | OAuth2 client secret |
 | `JOE_OIDC_REDIRECT_URL` | — | Callback URL (e.g. `https://joe.example.com/auth/callback`) |
-| `JOE_ADMIN_EMAIL` | — | Email granted `admin` role on first login |
+| `JOE_ADMIN_EMAIL` | — | Email granted `admin` role on any login (grant-only; never demotes) |
 | `JOE_OIDC_ADMIN_GROUPS` | — | Comma-separated OIDC group names that grant the `admin` role |
 | `JOE_OIDC_GROUPS_CLAIM` | `groups` | OIDC claim name containing the user's groups |
 | `JOE_SHORT_KEYWORD` | *(hostname first label)* | Override the short-link prefix shown in the UI (e.g. `go`); defaults to the first DNS label of the server hostname |
 | `JOE_SESSION_LIFETIME` | `720h` | Session absolute expiry (30 days) |
+| `JOE_LLM_PROVIDER` | *(unset — disabled)* | LLM metadata suggestions: `anthropic`, `openai`, or `openai-compatible` |
+| `JOE_LLM_API_KEY` | — | API key for the chosen LLM provider |
+| `JOE_LLM_MODEL` | *(provider default)* | LLM model name (e.g. `claude-haiku-4-5-20251001`, `gpt-4o-mini`, `llama3`) |
+| `JOE_LLM_BASE_URL` | *(provider default)* | Base URL override for Ollama or any OpenAI-compatible endpoint |
+| `JOE_LLM_PROMPT` | *(built-in default)* | Override the system prompt sent to the LLM |
 | `JOE_INSECURE_COOKIES` | `false` | When `true`, disables the `Secure` flag on session/auth cookies so login works over plain HTTP (local development only — never enable in production) |
 
 ## Key Conventions
@@ -42,7 +47,7 @@ Go + HTMX + DaisyUI/Tailwind. Single binary.
 - All config is loaded via viper — **no direct `os.Getenv` calls** outside `internal/config/`
 - HTMX partials: check `r.Header.Get("HX-Request")` and render fragment vs full page
 - Governing comments in code: `// Governing: SPEC-0001 REQ "Short Link Resolution", ADR-0002`
-- Slugs: `[a-z0-9][a-z0-9\-]*[a-z0-9]` — globally unique, reserved prefixes: `auth`, `static`, `dashboard`, `admin`
+- Slugs: `[a-z0-9][a-z0-9\-]*[a-z0-9]` — globally unique, reserved slugs (exact match): `admin`, `api`, `auth`, `dashboard`, `links`, `mcp`, `metrics`, `static`, `u` — defined in `internal/store/validate.go` (`store.ReservedSlugs()`)
 - Sessions store only `user_id` (UUID) and `role` — no raw OIDC claims
 
 ## Commands
@@ -56,10 +61,11 @@ joe-links migrate  # run migrations and exit
 
 Always use `gh release` when tagging releases — never push a bare tag without release notes.
 
-The CI auto-creates a minimal release when a tag is pushed. Update it with proper notes immediately after:
+The CI auto-creates a minimal release when a tag is pushed. Update it with proper notes immediately after — but **wait for the tag build to create the release first** (release-notes race): run `gh run watch` between `git push origin vX.Y.Z` and `gh release edit`, or the edit 404s / gets clobbered by the CI-created release.
 
 ```bash
 git tag vX.Y.Z && git push origin vX.Y.Z
+gh run watch   # wait for the tag build to create the release
 gh release edit vX.Y.Z --notes "$(cat <<'EOF'
 ## Summary line
 

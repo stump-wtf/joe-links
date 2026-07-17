@@ -11,7 +11,11 @@ See ADR-0016 for the architectural decisions that govern this capability.
 
 ### Requirement: Click Recording
 
-The resolver MUST record a click event for every successful redirect it issues.
+The resolver MUST record a click event for every successful `GET` redirect it
+issues. `HEAD` requests MUST be excluded from click recording (precedent: the
+keyword-redirect exclusion below) — Prometheus redirect counters still include
+them. Resolutions blocked by lifecycle state (expired or archived links,
+SPEC-0020) issue no redirect and MUST record no click.
 A click event SHALL be inserted asynchronously via a buffered channel so that
 the 302 redirect response is not blocked on the database write. The channel
 buffer MUST be at least 256 events. Events that cannot be queued because the
@@ -38,6 +42,11 @@ channel. The click writer goroutine MUST drain the channel on shutdown.
 - **WHEN** a request matches a keyword host or keyword path prefix and is redirected
 - **THEN** no click event is recorded (keyword redirects are not link-owned slugs)
 
+#### Scenario: HEAD redirects not recorded
+
+- **WHEN** a `HEAD` request resolves a known slug and receives the same 302 a `GET` would
+- **THEN** no click event is recorded; `joelinks_redirects_total{status="found"}` still increments
+
 ---
 
 ### Requirement: Click Data Schema
@@ -62,7 +71,11 @@ and PostgreSQL. Truncation MUST be rune-aware (count Unicode code points, never
 split a multi-byte character).
 
 A composite index on `(link_id, clicked_at DESC)` MUST be created to support
-per-link recent-click queries without full table scans. The `user_id` column
+per-link recent-click queries without full table scans. Known follow-up (PR
+#242): the keyset pagination in REQ "REST API Clicks Endpoint" orders by
+`clicked_at DESC, id DESC`, which this index no longer fully covers — a future
+migration SHOULD add `id` to the index to restore index-ordered pagination for
+high-volume links on MySQL/SQLite. The `user_id` column
 MUST be set to the authenticated user's ID when the request carries a session,
 and NULL otherwise.
 
@@ -119,7 +132,7 @@ A `slug` label MUST NOT be added to any counter or histogram (cardinality concer
 
 #### Scenario: Not-found counter increments
 
-- **WHEN** a slug lookup returns no result and a 404 is rendered
+- **WHEN** the resolver renders a 404 — because the slug lookup returned no result, or because the lookup found a variable link visited bare-slug (arity mismatch, SPEC-0009)
 - **THEN** `joelinks_redirects_total{status="not_found"}` increments by 1
 
 #### Scenario: Histogram records latency
@@ -132,8 +145,13 @@ A `slug` label MUST NOT be added to any counter or histogram (cardinality concer
 ### Requirement: Link Stats Dashboard Page
 
 A per-link analytics page MUST be available at
-`GET /dashboard/links/{id}/stats` within the authenticated dashboard. Only the
-link's owner(s), co-owners, and admin users MAY access this page; all other
+`GET /dashboard/links/{id}/stats` within the authenticated dashboard. Access is
+governed by the `LinkCaps` capability matrix (`CanStats`): the link's owner(s),
+co-owners, admin users, **and share recipients** (users with a `link_shares`
+record, SPEC-0010) MAY access this page — SPEC-0021 supersedes this spec's
+original owner-only wording. Clicker attribution (the display name of the
+clicking user) MUST be shown only to viewers with `CanManageShares` (owners,
+co-owners, admins) — share recipients MUST NOT see it (SPEC-0021). All other
 authenticated users MUST receive a 403 response; unauthenticated requests MUST
 be redirected to the login page.
 
@@ -146,7 +164,9 @@ The page MUST display:
   absent), and the user's display name if `user_id` is non-null (otherwise "anonymous")
 
 The page MUST follow existing HTMX/DaisyUI conventions: full page render on
-direct navigation, fragment render on HTMX request.
+direct navigation, fragment render on HTMX request. Timestamps MUST be rendered
+in UTC with RFC 3339 `title` attributes on the rendered elements (interim
+behavior until SPEC-0021's viewer-local timezone rendering lands).
 
 #### Scenario: Owner views stats
 
@@ -155,7 +175,7 @@ direct navigation, fragment render on HTMX request.
 
 #### Scenario: Non-owner denied
 
-- **WHEN** an authenticated user who is not an owner or admin navigates to `/dashboard/links/{id}/stats`
+- **WHEN** an authenticated user who is not an owner, co-owner, admin, or share recipient navigates to `/dashboard/links/{id}/stats`
 - **THEN** a 403 Forbidden response is returned
 
 #### Scenario: Unauthenticated redirect
@@ -174,8 +194,10 @@ direct navigation, fragment render on HTMX request.
 
 `GET /api/v1/links/{id}/stats` MUST return a JSON summary of click counts for the
 specified link. The endpoint MUST require bearer token authentication (following
-ADR-0009 conventions). Only link owners, co-owners, and admins MUST be authorised;
-other authenticated callers MUST receive 403. A non-existent link MUST return 404.
+ADR-0009 conventions). Authorization follows `CanStats`: link owners, co-owners,
+admins, and share recipients (SPEC-0010) MUST be authorised — SPEC-0021 supersedes
+the original owner-only wording; other authenticated callers MUST receive 403. A
+non-existent link MUST return 404.
 
 The response body MUST conform to:
 
@@ -200,7 +222,7 @@ The response body MUST conform to:
 
 #### Scenario: Unauthorized caller
 
-- **WHEN** a valid bearer token is presented but the token owner is not an owner/admin of the link
+- **WHEN** a valid bearer token is presented but the token owner holds no `CanStats` capability on the link (not an owner, co-owner, admin, or share recipient)
 - **THEN** a 403 JSON error response is returned
 
 ---
@@ -209,11 +231,15 @@ The response body MUST conform to:
 
 `GET /api/v1/links/{id}/clicks` MUST return a paginated list of click events for
 the specified link. The endpoint MUST support cursor-based pagination via an
-optional `before` query parameter (a `clicked_at` ISO 8601 timestamp) and a
-`limit` parameter (default 50, maximum 200). The response MUST include a
-`next_cursor` field set to the `clicked_at` of the last item when more results
-exist, and `null` when the page is the last page. Authorization rules are
-identical to the stats endpoint.
+optional `before` query parameter and a `limit` parameter (default 50, maximum
+200). `before` MUST accept either an opaque `next_cursor` value from a previous
+response or, for back-compat, a legacy bare RFC 3339 `clicked_at` timestamp;
+any other value MUST be rejected with 400. The response MUST include a
+`next_cursor` field set to an opaque SPEC-0005-style keyset cursor encoding
+`(clicked_at, id)` of the last item when more results exist, and `null` when
+the page is the last page. Authorization rules are identical to the stats
+endpoint (`CanStats` — share recipients included; clicker attribution in the
+`user` field is `CanManageShares`-only per SPEC-0021).
 
 Each item in the `clicks` array MUST include:
 
@@ -236,7 +262,12 @@ be `null` when absent.
 #### Scenario: Cursor pagination
 
 - **WHEN** a caller passes `before=<cursor>` from a previous response
-- **THEN** only clicks strictly before that timestamp are returned
+- **THEN** only clicks strictly before that `(clicked_at, id)` keyset position are returned (a legacy timestamp cursor degrades to strict `clicked_at <`)
+
+#### Scenario: Invalid cursor rejected
+
+- **WHEN** a caller passes a `before` value that is neither an opaque cursor nor an RFC 3339 timestamp
+- **THEN** the server responds 400 with a JSON error body
 
 #### Scenario: Anonymous click in list
 

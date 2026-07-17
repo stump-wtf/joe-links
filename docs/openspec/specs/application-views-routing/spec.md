@@ -102,20 +102,30 @@ The new link form MUST be accessible via `GET /dashboard/links/new` (full-page f
 - **WHEN** a user types in the tag input
 - **THEN** an HTMX request MUST fire (debounced 200ms) to `GET /dashboard/tags/suggest?q=...` and render a dropdown of matching tags
 
+#### Scenario: Tag Write Failure Surfaces
+
+- **WHEN** the link record is created but persisting its tags fails
+- **THEN** the failure MUST surface to the user as an error; tags MUST NOT be silently dropped (applies equally to the edit form's tag updates)
+
 ---
 
 ### Requirement: Link Detail View (`GET /dashboard/links/{id}`)
 
-A read-only detail page MUST be served at `GET /dashboard/links/{id}` for authenticated users who are owners or admins. It MUST display the full slug, URL (clickable), title, description, tags, and the list of co-owners. A copy button MUST copy the full go-link URL to the clipboard. Edit and Delete action buttons MUST be rendered for owners and admins.
+A read-only detail page MUST be served at `GET /dashboard/links/{id}` for authenticated users who are owners, co-owners, or admins. Share recipients (users with a `link_shares` record for the link, SPEC-0010) MUST also be able to view the page read-only. It MUST display the full slug, URL (clickable), title, description, tags, the list of co-owners, a visibility badge in the header, and Created/Updated timestamps rendered in UTC with a UTC label. A copy button MUST copy the full go-link URL to the clipboard. Edit and Delete action buttons MUST be rendered for owners and admins only. Dashboard list rows MUST link to the detail page for any viewer with view access to the link.
 
 #### Scenario: Detail View for Owner
 
 - **WHEN** an authenticated owner visits `/dashboard/links/{id}`
 - **THEN** the full link detail MUST be rendered with edit and delete controls visible
 
+#### Scenario: Detail View Read-Only for Share Recipient
+
+- **WHEN** a user whose only relationship to the link is a `link_shares` record visits `/dashboard/links/{id}`
+- **THEN** the detail page MUST render without edit, delete, or share-management controls
+
 #### Scenario: Detail View Forbidden for Non-Owner
 
-- **WHEN** a non-owner non-admin user visits `/dashboard/links/{id}`
+- **WHEN** an authenticated user who is not an owner, co-owner, share recipient, or admin visits `/dashboard/links/{id}`
 - **THEN** the server MUST return `403 Forbidden`
 
 #### Scenario: Copy Go-Link URL
@@ -200,7 +210,7 @@ A tag browser MUST be served at `GET /dashboard/tags` showing all tags with link
 #### Scenario: Tag Detail Shows Filtered Links
 
 - **WHEN** an authenticated user visits `/dashboard/tags/engineering`
-- **THEN** all links tagged with `engineering` that the user owns or co-owns MUST be listed
+- **THEN** all links tagged with `engineering` that are visible to the user under SPEC-0010 (public links, links they own or co-own, and links shared with them via `link_shares`; admins see all) MUST be listed
 
 #### Scenario: Tag with No Links
 
@@ -232,7 +242,7 @@ Admin views MUST require the `admin` role, enforced by middleware. `GET /admin` 
 
 ### Requirement: Slug Resolver and 404 Page
 
-`GET /{slug}` MUST be the last registered route. If the slug exists, the server MUST respond `302 Found` to the stored URL without authentication. If the slug does not exist, the server MUST render a friendly 404 page that includes the missing slug name, a "Create it now" button that pre-fills the slug in the new link form (requires auth; redirects to login if unauthenticated), and a search bar to find similarly-named links.
+`GET /{slug}` MUST be the last registered route. If the slug exists, the server MUST respond `302 Found` to the stored URL without authentication. If the slug does not exist, the server MUST render a friendly 404 page that includes the missing slug name, a "Create it now" button that pre-fills the slug in the new link form (requires auth; redirects to login if unauthenticated), and a search bar to find similarly-named links. Exception: the "Create it now" CTA MUST be suppressed for slugs reserved by expired or archived links — those slugs are still held by their links and cannot be re-created (SPEC-0020 REQs "Expired Link Resolution" and "Archived Link Resolution").
 
 #### Scenario: Known Slug Redirects
 

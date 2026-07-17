@@ -41,7 +41,7 @@ The database driver is selected at runtime via a configuration value (e.g., `DB_
 
 ### Confirmation
 
-Confirmed by: `goose` migration files in `db/migrations/`, a `db.New(driver, dsn string) (*sqlx.DB, error)` factory in `internal/db/`, and zero direct `database/sql` driver imports in non-infrastructure packages.
+Confirmed by: `goose` migration files in `internal/db/migrations/`, a `db.New(driver, dsn string) (*sqlx.DB, error)` factory in `internal/db/`, and zero direct `database/sql` driver imports in non-infrastructure packages.
 
 ## Pros and Cons of the Options
 
@@ -88,7 +88,7 @@ flowchart TD
     PGDriver["lib/pq or pgx"]
     SQLX["sqlx.DB"]
     Goose["goose\n(embedded migrations)"]
-    Migrations["db/migrations/*.sql"]
+    Migrations["internal/db/migrations/"]
     Repos["Repository layer\ninternal/store/"]
 
     Config --> Factory
@@ -108,5 +108,6 @@ flowchart TD
 * `sqlx`: https://github.com/jmoiron/sqlx
 * `goose`: https://github.com/pressly/goose
 * Related: ADR-0001 (Technology Stack), ADR-0003 (AuthN/AuthZ — user table required)
-* Migration files live in `db/migrations/` and are embedded with `//go:embed db/migrations/*.sql`
-* For dialect-specific SQL, use goose's `+goose StatementBegin` annotations or per-driver migration directories
+* Migration files live in `internal/db/migrations/` and are embedded with `//go:embed migrations` in `internal/db/migrate.go` — the directory holds both `.sql` files and dialect-aware `.go` migrations (e.g. `00011`, `00015`)
+* For dialect-specific SQL, use goose's `+goose StatementBegin` annotations or a Go migration switching on the dialect (see `internal/db/migrations/go_migrations.go`)
+* **SQLite FK enforcement**: SQLite defaults `foreign_keys` to OFF per connection, which silently disables every `ON DELETE CASCADE` / `SET NULL` in the schema. Production MUST enable it on every pooled connection — `internal/db/factory.go` (`sqliteDSN`) appends `_pragma=foreign_keys(1)` (plus `busy_timeout` and WAL) to the DSN so the driver applies it per connection; a post-open `Exec` would configure only one pooled connection. Migration `00014_cleanup_orphans.sql` removed the orphan rows that accumulated before enforcement, and migration `00015_link_shares_shared_by_cascade.go` (a dialect-aware Go migration) performs its SQLite table rebuild under the assumption that `foreign_keys` is ON — both rely on the pragma being active.

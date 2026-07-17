@@ -12,7 +12,7 @@ See ADR-0008 (REST API Layer), ADR-0009 (API Token Authentication), ADR-0001 (Te
 
 ### Requirement: API Router Mounting
 
-The application MUST mount a chi sub-router at the path prefix `/api/v1`. All routes under this prefix MUST return `Content-Type: application/json`. The `/api/v1` sub-router MUST be mounted before the catch-all slug resolver. The sub-router MUST apply a `BearerTokenMiddleware` that authenticates every request via `Authorization: Bearer <token>`.
+The application MUST mount a chi sub-router at the path prefix `/api/v1`. All routes under this prefix MUST return `Content-Type: application/json`. The `/api/v1` sub-router MUST be mounted before the catch-all slug resolver. The sub-router MUST apply a `BearerTokenMiddleware` that authenticates every request via `Authorization: Bearer <token>`, with the sole exception of the public `GET /api/v1/config` endpoint (see REQ "Server Config Discovery").
 
 #### Scenario: API Route Takes Precedence Over Slug Resolver
 
@@ -27,13 +27,13 @@ The application MUST mount a chi sub-router at the path prefix `/api/v1`. All ro
 #### Scenario: Unauthenticated Request Rejected
 
 - **WHEN** a request to any `/api/v1/*` endpoint lacks a valid `Authorization: Bearer <token>` header
-- **THEN** the server MUST return `401 Unauthorized` with `{"error": "unauthorized"}`
+- **THEN** the server MUST return `401 Unauthorized` with `{"error": "unauthorized", "code": "UNAUTHORIZED"}`
 
 ---
 
 ### Requirement: Standard Error Response Format
 
-All API error responses MUST use a consistent JSON structure. The response body MUST contain an `"error"` field with a human-readable message and a `"code"` field with a machine-readable constant.
+All API error responses MUST use a consistent JSON structure. The response body MUST contain an `"error"` field with a human-readable message and a `"code"` field with a machine-readable constant. Machine-readable `code` values MUST use `UPPER_SNAKE` casing (e.g. `SLUG_CONFLICT`, `UNAUTHORIZED`, `TAG_WRITE_FAILED`). Note: the MCP surface (SPEC-0018) deliberately keeps its lowercase error codes — that divergence is documented there.
 
 ```json
 {
@@ -53,7 +53,7 @@ All API error responses MUST use a consistent JSON structure. The response body 
 
 `GET /api/v1/links` MUST return the list of links the authenticated user owns or co-owns. For users with role `admin`, ALL links in the system MUST be returned. The response MUST be a JSON object with a `"links"` array and pagination fields.
 
-`POST /api/v1/links` MUST create a new link. The request body MUST include `slug` and `url`. `title`, `description`, and `tags` are optional. The slug MUST satisfy the format `[a-z0-9][a-z0-9\-]*[a-z0-9]` and MUST NOT match any reserved prefix.
+`POST /api/v1/links` MUST create a new link. The request body MUST include `slug` and `url`. `title`, `description`, and `tags` are optional. The slug MUST satisfy the format `[a-z0-9][a-z0-9\-]*[a-z0-9]` and MUST NOT be a reserved slug (exact match against `store.ReservedSlugs()`, SPEC-0002). Creation MUST be atomic: the link and its tags are persisted in one transaction — a tag-write failure MUST roll back the link and return an error, never a link with silently dropped tags.
 
 #### Scenario: List Returns Owned Links
 
@@ -77,7 +77,7 @@ All API error responses MUST use a consistent JSON structure. The response body 
 
 #### Scenario: Create Link — Invalid Slug
 
-- **WHEN** `POST /api/v1/links` is called with a slug that fails format validation or uses a reserved prefix
+- **WHEN** `POST /api/v1/links` is called with a slug that fails format validation or is a reserved slug
 - **THEN** the server MUST return `400 Bad Request` with a descriptive error
 
 #### Scenario: Pagination
@@ -89,9 +89,9 @@ All API error responses MUST use a consistent JSON structure. The response body 
 
 ### Requirement: Link Resource (`GET`, `PUT`, `DELETE /api/v1/links/{id}`)
 
-`GET /api/v1/links/{id}` MUST return the full link resource for owners or admins.
+`GET /api/v1/links/{id}` MUST return the full link resource for owners, co-owners, admins, and share recipients (users with a `link_shares` record for the link, SPEC-0010).
 
-`PUT /api/v1/links/{id}` MUST update the link's `url`, `title`, `description`, and `tags`. The `slug` field MUST be ignored in the request body (slugs are immutable after creation). Only owners or admins MAY update a link.
+`PUT /api/v1/links/{id}` MUST update the link's `url`, `title`, `description`, and `tags`. The `slug` field MUST be ignored in the request body (slugs are immutable after creation). Only owners or admins MAY update a link. A failure while persisting the updated tags MUST be reported with error code `TAG_WRITE_FAILED` — tags MUST NOT be silently dropped.
 
 `DELETE /api/v1/links/{id}` MUST delete the link. Only owners or admins MAY delete a link.
 
@@ -102,7 +102,7 @@ All API error responses MUST use a consistent JSON structure. The response body 
 
 #### Scenario: Get Link — Forbidden
 
-- **WHEN** a non-owner non-admin calls `GET /api/v1/links/{id}`
+- **WHEN** a caller who is not an owner, co-owner, share recipient, or admin calls `GET /api/v1/links/{id}`
 - **THEN** the server MUST return `403 Forbidden`
 
 #### Scenario: Update Link — Slug Is Immutable
@@ -134,14 +134,30 @@ All API error responses MUST use a consistent JSON structure. The response body 
 
 ### Requirement: Tags (`GET /api/v1/tags`, `GET /api/v1/tags/{slug}/links`)
 
-`GET /api/v1/tags` MUST return all tags that have at least one link, including each tag's link count.
+`GET /api/v1/tags` MUST return only tags with at least one link *visible to the caller* under SPEC-0010 (public, owned, co-owned, or shared via `link_shares`), with each tag's `link_count` computed over visible links only. Admins MUST see all tags with full counts.
 
-`GET /api/v1/tags/{slug}/links` MUST return all links tagged with the given slug that the authenticated user owns or co-owns (all for admins).
+`GET /api/v1/tags/{slug}/links` MUST return the tagged links visible to the caller under the same model (all links for admins). It MUST return `404` when the tag does not exist **or**, for non-admin callers, when the tag has no links visible to them — an invisible tag MUST be indistinguishable from a nonexistent one.
 
 #### Scenario: Tags Without Links Hidden
 
 - **WHEN** `GET /api/v1/tags` is called and a tag has no associated links
 - **THEN** that tag MUST NOT appear in the response
+
+#### Scenario: Invisible Tag Indistinguishable from Nonexistent
+
+- **WHEN** a non-admin calls `GET /api/v1/tags/{slug}/links` for a tag whose only links are other users' private or secure links not shared with the caller
+- **THEN** the server MUST return `404`, identical to the response for a tag that does not exist
+
+---
+
+### Requirement: Server Config Discovery (`GET /api/v1/config`)
+
+`GET /api/v1/config` MUST be a public, unauthenticated endpoint returning non-sensitive server configuration for clients such as the browser extension (SPEC-0008). The response MUST be a JSON object containing `short_keyword` — the configured short-link prefix (`JOE_SHORT_KEYWORD`, defaulting to the first DNS label of the server hostname). It is the only `/api/v1` endpoint exempt from `BearerTokenMiddleware`.
+
+#### Scenario: Config Returned Without Authentication
+
+- **WHEN** `GET /api/v1/config` is called with no `Authorization` header
+- **THEN** the server MUST return `200 OK` with `{"short_keyword": "..."}`
 
 ---
 

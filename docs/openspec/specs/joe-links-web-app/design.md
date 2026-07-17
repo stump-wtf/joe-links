@@ -88,8 +88,9 @@ References:
 
 ### Admin Role Assignment
 
-**Choice**: Match `JOE_ADMIN_EMAIL` environment variable against the authenticated user's email on first sign-in.
-**Rationale**: Simple, operator-controlled, requires no seed data or separate bootstrap step. If the signing-in user's OIDC email matches `JOE_ADMIN_EMAIL`, their role is set to `admin` during the upsert; otherwise it defaults to `user`. Subsequent logins preserve the stored role — `JOE_ADMIN_EMAIL` only applies during the initial record creation.
+**Choice**: Match `JOE_ADMIN_EMAIL` environment variable against the authenticated user's email on every sign-in (grant-only).
+**Rationale**: Simple, operator-controlled, requires no seed data or separate bootstrap step. Env-driven admin configuration is **grant-only on any login**: if the signing-in user's OIDC email matches `JOE_ADMIN_EMAIL`, their role is set to `admin` during the upsert — including promoting a matching pre-existing user at every login. Env matching never demotes; demotion is only possible via the admin UI/API, and an env-granted user demoted there is re-promoted at their next login (the env var is authoritative for its grant).
+**Group-based grants**: `JOE_OIDC_ADMIN_GROUPS` (comma-separated OIDC group names) grants the `admin` role with the same grant-only-on-any-login semantics when the user's group claim intersects the configured list. The claim name defaults to `groups` and is configurable via `JOE_OIDC_GROUPS_CLAIM`.
 **Alternatives considered**:
 - Auto-assign admin to the first user ever: Fragile — depends on insertion order and can be a security issue in shared environments
 - Admin promoted via CLI command: Requires operational tooling that isn't yet built

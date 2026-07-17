@@ -107,7 +107,7 @@ Skip application-level metrics. Instead, run SQL queries against the `link_click
 
 We choose the append-only events table because it preserves the complete click history as immutable facts, enabling arbitrary analytics queries now and in the future. The unbounded growth concern is mitigated by:
 
-1. **Indexed queries**: A composite index on `(link_id, clicked_at DESC)` makes per-link recent-click queries fast regardless of table size.
+1. **Indexed queries**: A composite index on `(link_id, clicked_at DESC)` makes per-link recent-click queries fast regardless of table size. (Known follow-up from PR #242: the clicks API now keyset-paginates on `(clicked_at, id)`, so adding `id` to this index would restore fully index-ordered pagination for high-volume links.)
 2. **Future retention policy**: A background goroutine or CLI command can purge rows older than a configurable retention window (e.g., 90 days). This is additive and does not require a schema change.
 3. **Practical scale**: A go-links service typically handles hundreds to low thousands of clicks per day, not millions. The table will remain manageable for years on SQLite, let alone MySQL/PostgreSQL.
 

@@ -14,7 +14,7 @@ See ADR-0007 (Application Views and Routing), SPEC-0004 (Application Views and R
 
 ### Requirement: Public Link Browser (`GET /links`)
 
-The application MUST serve a public link browser at `GET /links`. This page MUST NOT require authentication. It MUST display all links with `visibility = 'public'` across all users. Each link entry MUST show: slug (as a clickable go-link), title (or URL if no title), description excerpt (truncated to 150 characters with ellipsis), tag chips, and the link owner's display name (primary owner). The page MUST be paginated with a default page size of 25 links. Links MUST be ordered by `created_at DESC` (newest first).
+The application MUST serve a public link browser at `GET /links`. This page MUST NOT require authentication. It MUST display all links with `visibility = 'public'` across all users, excluding expired and archived links (SPEC-0020). Each link entry MUST show: slug (as a clickable go-link), title (or URL if no title), description excerpt (truncated to 150 characters with ellipsis), tag chips, and the link owner's display name (primary owner). The page MUST be paginated with a default page size of 25 links. Links MUST be ordered by `created_at DESC` (newest first).
 
 #### Scenario: Unauthenticated User Browses Links
 
@@ -77,7 +77,7 @@ The route `GET /links` MUST be registered as a named route before the catch-all 
 
 ### Requirement: User Profile Page (`GET /u/{display_name_slug}`)
 
-The application MUST serve per-user profile pages at `GET /u/{display_name_slug}`. The `display_name_slug` MUST be derived from the user's `display_name` by lowercasing, replacing spaces with hyphens, and stripping characters outside `[a-z0-9-]`. The page MUST NOT require authentication. The profile page MUST display: the user's display name as a heading, an avatar initial (first letter of display name, uppercase, rendered in a colored circle using DaisyUI avatar placeholder), and a list of the user's public links (links where the user appears in `link_owners` AND `visibility = 'public'`). Links MUST be displayed in the same format as the public link browser (slug, title, description excerpt, tags). The link list MUST be paginated with a default page size of 25. If the user has no public links, a "No public links" message MUST be displayed.
+The application MUST serve per-user profile pages at `GET /u/{display_name_slug}`. The `display_name_slug` MUST be derived from the user's `display_name` by lowercasing, replacing spaces with hyphens, and stripping characters outside `[a-z0-9-]`. The page MUST NOT require authentication. The profile page MUST display: the user's display name as a heading, an avatar initial (first letter of display name, uppercase, rendered in a colored circle using DaisyUI avatar placeholder), and a list of the user's public links (links where the user appears in `link_owners` AND `visibility = 'public'`, excluding expired and archived links per SPEC-0020). Links MUST be displayed in the same format as the public link browser (slug, title, description excerpt, tags). The link list MUST be paginated with a default page size of 25. If the user has no public links, a "No public links" message MUST be displayed.
 
 #### Scenario: User Profile Rendered
 

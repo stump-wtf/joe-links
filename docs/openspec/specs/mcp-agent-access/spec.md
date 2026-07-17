@@ -62,7 +62,7 @@ The MCP server SHALL expose the following tools, and in v1 only these tools. Eac
 | `share_link` | Grant a user access to a secure link | `link`, `email` |
 | `unshare_link` | Revoke a share grant | `link`, `email` |
 | `add_co_owner` | Add a co-owner by email | `link`, `email` |
-| `get_link_stats` | Click totals and recent clicks | `link`, `limit` |
+| `get_link_stats` | Click totals and recent clicks for a link you own or that is shared with you | `link`, `limit` |
 | `suggest_link_metadata` | LLM-proposed slug/title/description/tags for a URL (SPEC-0017) | `url` |
 | `list_keywords` | List keyword templates (SPEC-0008) | — |
 
@@ -113,7 +113,7 @@ Every tool MUST enforce the same authorization rules as its corresponding `/api/
 
 ### Requirement: Structured Tool Errors
 
-Tool failures MUST be returned as MCP tool results flagged as errors (not protocol-level errors) carrying a stable machine-readable code plus a human-readable message. Codes MUST reuse the REST API error vocabulary (e.g. `duplicate_slug`, `not_found`, `forbidden`, `validation_failed`) with one consistent casing. Protocol-level errors are reserved for malformed MCP messages and authentication failures.
+Tool failures MUST be returned as MCP tool results flagged as errors (not protocol-level errors) carrying a stable machine-readable code plus a human-readable message. Codes MUST reuse the REST API error vocabulary (e.g. `duplicate_slug`, `not_found`, `forbidden`, `validation_failed`), rendered in **lowercase**. This deliberately diverges from the REST API's `UPPER_SNAKE` casing (SPEC-0005): the lowercase codes are a published agent-facing contract that existing MCP clients already match on, so they stay stable even though REST standardized on `UPPER_SNAKE` (PR #263). The vocabularies overlap but are not identical — some code names also differ where the surfaces' semantics do (e.g. MCP `duplicate_slug` vs REST `SLUG_CONFLICT`, MCP `validation_failed` vs REST `BAD_REQUEST`); each surface's set is stable on its own. Protocol-level errors are reserved for malformed MCP messages and authentication failures.
 
 #### Scenario: Duplicate slug
 
@@ -167,7 +167,7 @@ All database operations MUST follow structured data access patterns:
 
 ## Security Requirements
 
-<!-- Governing: ADR-0018 (Security-by-Default), SPEC-0016 REQ "Mandatory Security Section in Web Specs" -->
+<!-- Governing: ADR-0018 -->
 
 ### Authentication
 

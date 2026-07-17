@@ -33,7 +33,11 @@ The application MUST add a `visibility` TEXT column to the `links` table via a g
 
 ### Requirement: Link Shares Table
 
-The application MUST create a `link_shares` table via a goose migration with the following columns: `link_id` (TEXT, FK to `links.id`, ON DELETE CASCADE), `user_id` (TEXT, FK to `users.id`, ON DELETE CASCADE), `shared_by` (TEXT, FK to `users.id`), `created_at` (DATETIME, NOT NULL, DEFAULT CURRENT_TIMESTAMP). The composite `(link_id, user_id)` MUST be the primary key. The `link_shares` table MUST have a composite index on `(link_id, user_id)` for efficient access checks.
+The application MUST create a `link_shares` table via a goose migration with the following columns: `link_id` (TEXT, FK to `links.id`, ON DELETE CASCADE), `user_id` (TEXT, FK to `users.id`, ON DELETE CASCADE), `shared_by` (TEXT, NOT NULL, FK to `users.id`, ON DELETE CASCADE), `created_at` (DATETIME, NOT NULL, DEFAULT CURRENT_TIMESTAMP). The composite `(link_id, user_id)` MUST be the primary key. The `link_shares` table MUST have a composite index on `(link_id, user_id)` for efficient access checks.
+
+The `shared_by` CASCADE matches the sibling `link_id`/`user_id` FKs and is a backstop for direct or user-level deletes only: the admin user-deletion flow in reassign mode explicitly reattributes shares before the user row is deleted (PR #249).
+
+A `link_shares` row grants its `user_id` a **read-only capability set** on the link: viewing the link detail page (SPEC-0004), reading the link resource via API and MCP (SPEC-0005, SPEC-0018), and reading stats and clicks (SPEC-0016, gated as `CanStats` in the `LinkCaps` capability matrix, `internal/store/auth.go`). Share recipients MUST NOT receive edit, delete, ownership, or share-management capabilities (`CanManageShares` remains owners, co-owners, and admins).
 
 #### Scenario: Share Record Created
 
@@ -137,10 +141,10 @@ Admins MUST always be authorized to access secure links, regardless of ownership
 The user dashboard (`GET /dashboard`) MUST filter links based on visibility:
 
 - **Public links**: MUST be shown to the owner in their own link list.
-- **Private links**: MUST be shown only to owners and co-owners. MUST NOT appear in other users' search results or tag filters.
+- **Private links**: MUST be shown only to owners, co-owners, and users with a `link_shares` record (see REQ "Link Share Management Endpoints" — an explicit share grants visibility even on private links). MUST NOT appear in other users' search results or tag filters.
 - **Secure links**: MUST be shown to owners, co-owners, and users with a `link_shares` record. A "Shared with me" section or filter SHOULD be available so users can find secure links shared with them.
 
-The dashboard search and tag filter MUST respect visibility — searching for a private or secure link by another owner MUST NOT return results.
+The dashboard search and tag filter MUST respect visibility — searching for a private or secure link by another owner MUST NOT return results. The dashboard link list MUST always display the Visibility column so owners can see each link's mode at a glance.
 
 #### Scenario: Owner Sees All Own Links
 
@@ -161,7 +165,7 @@ The dashboard search and tag filter MUST respect visibility — searching for a 
 
 ### Requirement: Admin Visibility Override
 
-Admin views (`/admin/links`, `/api/v1/admin/links`) MUST display ALL links regardless of their visibility setting. Each link's visibility MUST be displayed as a badge or label in the admin links table. Admins MUST be able to change a link's visibility via the admin inline edit (SPEC-0011).
+Admin views (`/admin/links`, `/api/v1/admin/links`) MUST display ALL links regardless of their visibility setting. Each link's visibility MUST be displayed as a badge or label in the admin links table. Admins MUST be able to change a link's visibility via the admin inline edit (SPEC-0011). The admin override extends to every tag surface: `GET /api/v1/tags`, `GET /api/v1/tags/{slug}/links` (SPEC-0005), the dashboard tag browser (`/dashboard/tags`, `/dashboard/tags/{slug}`, SPEC-0004), and the tag autocomplete (`GET /dashboard/tags/suggest`) MUST show admins all tags and links with unfiltered counts.
 
 #### Scenario: Admin Sees All Links
 
@@ -202,6 +206,8 @@ The application MUST provide endpoints for managing shares on secure links:
 
 - `POST /dashboard/links/{id}/shares` — add a user to `link_shares` for the link. The request body MUST include an `email` field to identify the target user. Only link owners, co-owners, and admins MUST be authorized to add shares.
 - `DELETE /dashboard/links/{id}/shares/{uid}` — remove a user from `link_shares` for the link. Only link owners, co-owners, and admins MUST be authorized to remove shares.
+
+Share creation is NOT gated on `visibility = 'secure'`: shares MAY be created on links of any visibility, and an explicit share grants the recipient visibility (dashboard listing, detail view, stats) even on a `private` link. Rationale: an explicit grant by an owner is a stronger signal than the link's discoverability mode, this is the implemented and tested behavior, and it lets owners stage shares before flipping a link to `secure`. Resolution behavior is unchanged — `private` links still redirect for anyone with the slug, and only `secure` links enforce share grants at resolution time.
 
 Both endpoints MUST support HTMX responses for inline updates on the link detail page.
 
@@ -275,12 +281,17 @@ The link create form (`GET /dashboard/links/new`) and link edit form (`GET /dash
 
 ### Requirement: Share Management Panel on Link Detail
 
-The link detail page (`GET /dashboard/links/{id}`) MUST display a "Shared with" panel when the link has `visibility = 'secure'`. The panel MUST list all users with `link_shares` records for the link, showing their display name and email. The panel MUST include an "Add User" input (email field with search/autocomplete) and a "Remove" button for each shared user. The panel SHOULD be hidden when the link's visibility is not `secure`, but SHOULD appear immediately when visibility is changed to `secure` in the edit form.
+The link detail page (`GET /dashboard/links/{id}`) MUST display a "Shared with" panel when the link has `visibility = 'secure'` — but only to viewers holding share-management capability (`CanManageShares`: owners, co-owners, and admins). Share recipients viewing the detail page read-only (SPEC-0004) MUST NOT see the panel, since the share roster of a secure link is itself sensitive. The panel MUST list all users with `link_shares` records for the link, showing their display name and email. The panel MUST include an "Add User" input (email field with search/autocomplete) and a "Remove" button for each shared user. The panel SHOULD be hidden when the link's visibility is not `secure`, but SHOULD appear immediately when visibility is changed to `secure` in the edit form.
 
 #### Scenario: Share Panel Shown for Secure Link
 
 - **WHEN** a user views the detail page of a secure link they own
 - **THEN** a "Shared with" panel MUST be displayed listing all shared users
+
+#### Scenario: Share Panel Hidden from Share Recipient
+
+- **WHEN** a share recipient (no ownership, not admin) views the detail page of a secure link shared with them
+- **THEN** the "Shared with" panel MUST NOT be displayed
 
 #### Scenario: Share Panel Hidden for Public Link
 

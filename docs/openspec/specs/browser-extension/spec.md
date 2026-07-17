@@ -43,6 +43,12 @@ go-links host (default `go`) MUST always be included. The extension SHOULD fetch
 keyword hosts from the joe-links server's keyword API endpoint at startup and on a periodic
 refresh interval (default 60 minutes), merging results with the canonical host list.
 
+The extension MUST also discover the server's configured short keyword via the public
+`GET /api/v1/config` endpoint (SPEC-0005). When the endpoint returns 404 (older server), the
+extension MUST fall back to the first DNS label of the configured server hostname; on a
+transient failure (network error, 5xx) it MUST keep the last known value. The discovered
+keyword MUST be matched case-insensitively.
+
 #### Scenario: Server has additional keyword hosts registered
 
 - **WHEN** the extension starts and the server returns `["go", "wtf", "gh"]` from the keyword
@@ -61,6 +67,13 @@ refresh interval (default 60 minutes), merging results with the canonical host l
 - **WHEN** the refresh interval elapses
 - **THEN** the extension re-fetches the keyword API and updates its in-memory list; existing
   browser sessions are not disrupted
+
+#### Scenario: Short keyword discovered via config endpoint
+
+- **WHEN** the extension fetches `GET /api/v1/config` and receives `{"short_keyword": "wtf"}`
+- **THEN** the extension treats `wtf` (matched case-insensitively) as the short-link prefix;
+  if the endpoint returns 404 it falls back to the first label of the server hostname, and on
+  a transient failure it keeps the last known value
 
 ---
 
@@ -200,7 +213,9 @@ the user can configure their server URL and API key.
 The extension MUST provide a browser action popup (`popup.html`) that allows the user to
 create a new short link on the joe-links server. When the popup opens, it MUST pre-fill the
 current tab's URL in the destination URL field. The user MUST be able to enter a slug and
-MAY optionally specify a keyword prefix. Submitting the form MUST send a POST request to
+MAY optionally specify a keyword prefix. The popup MUST include a visibility select offering
+`public`, `private`, and `secure` (SPEC-0010), defaulting to `public`; the selected value
+MUST be submitted with the create request. Submitting the form MUST send a POST request to
 `{baseURL}/api/v1/links` using the stored API key as an `Authorization: Bearer {key}` header.
 On success, the popup MUST display the created link slug. On error, the popup MUST display
 the error message returned by the server.

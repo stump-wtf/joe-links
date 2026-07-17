@@ -64,8 +64,11 @@ exhausts all options. The resolver route MUST be changed from `/{slug}` to a wil
 
 When the resolver finds a matching prefix slug whose URL contains `$` placeholders, it MUST
 substitute the remaining path segments into the template positionally (left to right, split on
-`/`). The number of remaining segments MUST equal the number of distinct placeholders in the
-URL. After substitution the resolver MUST issue a 302 redirect to the resolved URL.
+`/`). Substitution MUST be a single non-recursive pass over the template: substituted values
+are never re-scanned for placeholders, so a value containing `$foo` is emitted literally. The
+number of remaining segments MUST equal the number of distinct placeholders in the URL — a
+bare-slug visit to a variable link (zero remaining segments) is an arity mismatch and MUST
+return 404. After substitution the resolver MUST issue a 302 redirect to the resolved URL.
 
 #### Scenario: Single variable substituted correctly
 
@@ -81,6 +84,11 @@ URL. After substitution the resolver MUST issue a 302 redirect to the resolved U
 
 - **WHEN** slug `my-link` expects two variables but the path provides only one segment beyond the slug
 - **THEN** the resolver falls through to a 404 response
+
+#### Scenario: Bare-slug visit to a variable link returns 404
+
+- **WHEN** slug `github` has URL `https://github.com/$username` and the request path is `/github` with no further segments
+- **THEN** the resolver treats it as an arity mismatch and responds 404
 
 #### Scenario: Static link unaffected by new routing
 
