@@ -334,6 +334,141 @@ func TestClicks_NextCursor(t *testing.T) {
 	}
 }
 
+// seedClickAt inserts a click row directly with an explicit clicked_at
+// (RecordClick stamps time.Now(), so shared-timestamp scenarios need raw
+// inserts). The referrer uniquely identifies the row in API responses,
+// which do not expose click IDs.
+func seedClickAt(t *testing.T, env *testEnv, linkID, id, referrer string, ts time.Time) {
+	t.Helper()
+	_, err := env.DB.ExecContext(context.Background(),
+		env.DB.Rebind(`INSERT INTO link_clicks (id, link_id, user_id, ip_hash, user_agent, referrer, clicked_at) VALUES (?, ?, NULL, ?, '', ?, ?)`),
+		id, linkID, "hash", referrer, ts)
+	if err != nil {
+		t.Fatalf("insert click %s: %v", id, err)
+	}
+}
+
+// TestClicks_Pagination_SharedTimestamp verifies rows sharing the boundary
+// timestamp are not skipped when following next_cursor (the cursor carries a
+// (clicked_at, id) keyset tiebreaker).
+// Governing: SPEC-0016 REQ "REST API Clicks Endpoint", SPEC-0005 REQ "Pagination"
+func TestClicks_Pagination_SharedTimestamp(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "clicks-shared-ts@example.com", "user")
+	token := seedToken(t, env, user.ID)
+	ctx := context.Background()
+
+	link, err := env.LinkStore.Create(ctx, "clicks-shared-ts", "https://example.com", user.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	// 5 clicks all within the same second — the MySQL TIMESTAMP collision
+	// case. Each gets a unique referrer so pages can be diffed.
+	shared := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	refs := []string{"https://ref.example/1", "https://ref.example/2", "https://ref.example/3", "https://ref.example/4", "https://ref.example/5"}
+	for i, ref := range refs {
+		seedClickAt(t, env, link.ID, "click-shared-"+string(rune('a'+i)), ref, shared)
+	}
+
+	// Walk all pages with limit=2 following next_cursor.
+	seen := map[string]int{}
+	cursor := ""
+	pages := 0
+	for {
+		url := "/links/" + link.ID + "/clicks?limit=2"
+		if cursor != "" {
+			url += "&before=" + cursor
+		}
+		req := httptest.NewRequest("GET", url, nil)
+		authRequest(req, token)
+		rec := httptest.NewRecorder()
+		env.Router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("page %d status = %d, want %d; body: %s", pages, rec.Code, http.StatusOK, rec.Body.String())
+		}
+
+		var resp struct {
+			Clicks []struct {
+				Referrer *string `json:"referrer"`
+			} `json:"clicks"`
+			NextCursor *string `json:"next_cursor"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode page %d: %v", pages, err)
+		}
+		pages++
+		if pages > 10 {
+			t.Fatal("pagination did not terminate")
+		}
+		for _, c := range resp.Clicks {
+			if c.Referrer == nil {
+				t.Fatal("referrer should not be nil for seeded click")
+			}
+			seen[*c.Referrer]++
+		}
+		if resp.NextCursor == nil {
+			break
+		}
+		cursor = *resp.NextCursor
+	}
+
+	if len(seen) != len(refs) {
+		t.Errorf("distinct clicks seen = %d, want %d (seen: %v)", len(seen), len(refs), seen)
+	}
+	for _, ref := range refs {
+		if seen[ref] != 1 {
+			t.Errorf("click %s seen %d times, want exactly 1", ref, seen[ref])
+		}
+	}
+}
+
+// TestClicks_LegacyTimestampBefore verifies a bare RFC 3339 timestamp is
+// still accepted as a before cursor (backward compatibility with cursors
+// issued before the opaque keyset format).
+// Governing: SPEC-0016 REQ "REST API Clicks Endpoint"
+func TestClicks_LegacyTimestampBefore(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "clicks-legacy-before@example.com", "user")
+	token := seedToken(t, env, user.ID)
+	ctx := context.Background()
+
+	link, err := env.LinkStore.Create(ctx, "clicks-legacy-before", "https://example.com", user.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	older := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 7, 1, 12, 0, 5, 0, time.UTC)
+	seedClickAt(t, env, link.ID, "click-legacy-a", "https://ref.example/older", older)
+	seedClickAt(t, env, link.ID, "click-legacy-b", "https://ref.example/newer", newer)
+
+	req := httptest.NewRequest("GET", "/links/"+link.ID+"/clicks?before="+newer.Format(time.RFC3339Nano), nil)
+	authRequest(req, token)
+	rec := httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		Clicks []struct {
+			Referrer *string `json:"referrer"`
+		} `json:"clicks"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Clicks) != 1 {
+		t.Fatalf("len(clicks) = %d, want 1", len(resp.Clicks))
+	}
+	if resp.Clicks[0].Referrer == nil || *resp.Clicks[0].Referrer != "https://ref.example/older" {
+		t.Errorf("expected only the older click, got %+v", resp.Clicks[0])
+	}
+}
+
 func TestClicks_InvalidBefore_BadRequest(t *testing.T) {
 	env := newTestEnv(t)
 	user := seedUser(t, env, "clicks-bad-before@example.com", "user")

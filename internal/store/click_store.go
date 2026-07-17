@@ -38,6 +38,7 @@ type ClickStats struct {
 
 // RecentClick represents a single click with optional user info.
 type RecentClick struct {
+	ID          string    `db:"id"`
 	ClickedAt   time.Time `db:"clicked_at"`
 	Referrer    string    `db:"referrer"`
 	UserID      string    `db:"user_id"`
@@ -116,14 +117,15 @@ func (s *ClickStore) GetClickStats(ctx context.Context, linkID string) (ClickSta
 func (s *ClickStore) ListRecentClicks(ctx context.Context, linkID string, limit int) ([]RecentClick, error) {
 	var clicks []RecentClick
 	err := s.db.SelectContext(ctx, &clicks, s.q(`
-		SELECT c.clicked_at,
+		SELECT c.id,
+		       c.clicked_at,
 		       COALESCE(c.referrer, '') AS referrer,
 		       COALESCE(c.user_id, '') AS user_id,
 		       COALESCE(u.display_name, '') AS display_name
 		FROM link_clicks c
 		LEFT JOIN users u ON u.id = c.user_id
 		WHERE c.link_id = ?
-		ORDER BY c.clicked_at DESC
+		ORDER BY c.clicked_at DESC, c.id DESC
 		LIMIT ?
 	`), linkID, limit)
 	if err != nil {
@@ -132,21 +134,28 @@ func (s *ClickStore) ListRecentClicks(ctx context.Context, linkID string, limit 
 	return clicks, nil
 }
 
-// ListRecentClicksBefore returns clicks for a link strictly before the given time, newest first.
-// If before is zero, returns from the most recent.
-// Governing: SPEC-0016 REQ "REST API Clicks Endpoint", ADR-0016
-func (s *ClickStore) ListRecentClicksBefore(ctx context.Context, linkID string, before time.Time, limit int) ([]RecentClick, error) {
+// ListRecentClicksBefore returns clicks for a link strictly before the given
+// keyset position, newest first. Rows are ordered by (clicked_at, id)
+// descending so the cursor has a deterministic tiebreaker when multiple rows
+// share a timestamp (MySQL TIMESTAMP is second-precision, so bursts collide).
+// If before is zero, returns from the most recent. If beforeID is empty
+// (legacy timestamp-only cursor), falls back to a strict clicked_at
+// comparison — rows sharing the boundary timestamp may be skipped, which
+// matches the pre-tiebreaker behavior for old cursors.
+// Governing: SPEC-0016 REQ "REST API Clicks Endpoint", SPEC-0005 REQ "Pagination", ADR-0016
+func (s *ClickStore) ListRecentClicksBefore(ctx context.Context, linkID string, before time.Time, beforeID string, limit int) ([]RecentClick, error) {
 	var clicks []RecentClick
 	if before.IsZero() {
 		err := s.db.SelectContext(ctx, &clicks, s.q(`
-			SELECT c.clicked_at,
+			SELECT c.id,
+			       c.clicked_at,
 			       COALESCE(c.referrer, '') AS referrer,
 			       COALESCE(c.user_id, '') AS user_id,
 			       COALESCE(u.display_name, '') AS display_name
 			FROM link_clicks c
 			LEFT JOIN users u ON u.id = c.user_id
 			WHERE c.link_id = ?
-			ORDER BY c.clicked_at DESC
+			ORDER BY c.clicked_at DESC, c.id DESC
 			LIMIT ?
 		`), linkID, limit)
 		if err != nil {
@@ -155,17 +164,37 @@ func (s *ClickStore) ListRecentClicksBefore(ctx context.Context, linkID string, 
 		return clicks, nil
 	}
 
+	if beforeID == "" {
+		err := s.db.SelectContext(ctx, &clicks, s.q(`
+			SELECT c.id,
+			       c.clicked_at,
+			       COALESCE(c.referrer, '') AS referrer,
+			       COALESCE(c.user_id, '') AS user_id,
+			       COALESCE(u.display_name, '') AS display_name
+			FROM link_clicks c
+			LEFT JOIN users u ON u.id = c.user_id
+			WHERE c.link_id = ? AND c.clicked_at < ?
+			ORDER BY c.clicked_at DESC, c.id DESC
+			LIMIT ?
+		`), linkID, before, limit)
+		if err != nil {
+			return nil, err
+		}
+		return clicks, nil
+	}
+
 	err := s.db.SelectContext(ctx, &clicks, s.q(`
-		SELECT c.clicked_at,
+		SELECT c.id,
+		       c.clicked_at,
 		       COALESCE(c.referrer, '') AS referrer,
 		       COALESCE(c.user_id, '') AS user_id,
 		       COALESCE(u.display_name, '') AS display_name
 		FROM link_clicks c
 		LEFT JOIN users u ON u.id = c.user_id
-		WHERE c.link_id = ? AND c.clicked_at < ?
-		ORDER BY c.clicked_at DESC
+		WHERE c.link_id = ? AND (c.clicked_at < ? OR (c.clicked_at = ? AND c.id < ?))
+		ORDER BY c.clicked_at DESC, c.id DESC
 		LIMIT ?
-	`), linkID, before, limit)
+	`), linkID, before, before, beforeID, limit)
 	if err != nil {
 		return nil, err
 	}

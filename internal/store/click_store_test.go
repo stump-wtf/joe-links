@@ -414,7 +414,7 @@ func TestListRecentClicksBefore_ZeroBefore(t *testing.T) {
 	}
 
 	// Zero time => return from most recent.
-	clicks, err := cs.ListRecentClicksBefore(ctx, link.ID, time.Time{}, 10)
+	clicks, err := cs.ListRecentClicksBefore(ctx, link.ID, time.Time{}, "", 10)
 	if err != nil {
 		t.Fatalf("ListRecentClicksBefore: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestListRecentClicksBefore_CursorFilters(t *testing.T) {
 	}
 
 	// Query with before = t3 should return only t2 and t1.
-	clicks, err := cs.ListRecentClicksBefore(ctx, link.ID, t3, 10)
+	clicks, err := cs.ListRecentClicksBefore(ctx, link.ID, t3, "", 10)
 	if err != nil {
 		t.Fatalf("ListRecentClicksBefore: %v", err)
 	}
@@ -470,12 +470,82 @@ func TestListRecentClicksBefore_EmptyResult(t *testing.T) {
 	cs, _, _, _, linkID := newClickTestEnv(t)
 	ctx := context.Background()
 
-	clicks, err := cs.ListRecentClicksBefore(ctx, linkID, time.Now(), 10)
+	clicks, err := cs.ListRecentClicksBefore(ctx, linkID, time.Now(), "", 10)
 	if err != nil {
 		t.Fatalf("ListRecentClicksBefore: %v", err)
 	}
 	if len(clicks) != 0 {
 		t.Errorf("len = %d, want 0", len(clicks))
+	}
+}
+
+// TestListRecentClicksBefore_SharedTimestampTiebreaker verifies the (clicked_at, id)
+// keyset cursor does not skip rows sharing the boundary timestamp.
+// Governing: SPEC-0016 REQ "REST API Clicks Endpoint", SPEC-0005 REQ "Pagination"
+func TestListRecentClicksBefore_SharedTimestampTiebreaker(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	owns := store.NewOwnershipStore(db)
+	tags := store.NewTagStore(db)
+	ls := store.NewLinkStore(db, owns, tags)
+	us := store.NewUserStore(db)
+	cs := store.NewClickStore(db)
+	ctx := context.Background()
+
+	u, err := us.Upsert(ctx, "test", "sub-tb", "tb@example.com", "TB User", "")
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	link, err := ls.Create(ctx, "tb-link", "https://example.com", u.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+
+	// Insert 5 clicks all sharing one timestamp (a click burst within
+	// MySQL's second-precision TIMESTAMP resolution).
+	shared := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	ids := []string{"click-tb-a", "click-tb-b", "click-tb-c", "click-tb-d", "click-tb-e"}
+	for _, id := range ids {
+		_, err := db.ExecContext(ctx,
+			db.Rebind(`INSERT INTO link_clicks (id, link_id, user_id, ip_hash, user_agent, referrer, clicked_at) VALUES (?, ?, NULL, ?, '', '', ?)`),
+			id, link.ID, "hash", shared)
+		if err != nil {
+			t.Fatalf("insert click %s: %v", id, err)
+		}
+	}
+
+	// Walk pages of 2 using the (clicked_at, id) cursor; every row must
+	// appear exactly once across pages.
+	seen := map[string]int{}
+	var before time.Time
+	var beforeID string
+	pages := 0
+	for {
+		clicks, err := cs.ListRecentClicksBefore(ctx, link.ID, before, beforeID, 2)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		if len(clicks) == 0 {
+			break
+		}
+		pages++
+		if pages > 10 {
+			t.Fatal("pagination did not terminate")
+		}
+		for _, c := range clicks {
+			seen[c.ID]++
+		}
+		last := clicks[len(clicks)-1]
+		before = last.ClickedAt
+		beforeID = last.ID
+	}
+
+	if len(seen) != len(ids) {
+		t.Errorf("distinct rows seen = %d, want %d (seen: %v)", len(seen), len(ids), seen)
+	}
+	for _, id := range ids {
+		if seen[id] != 1 {
+			t.Errorf("row %s seen %d times, want exactly 1", id, seen[id])
+		}
 	}
 }
 

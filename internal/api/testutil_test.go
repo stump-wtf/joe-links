@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/joestump/joe-links/internal/api"
 	"github.com/joestump/joe-links/internal/auth"
 	"github.com/joestump/joe-links/internal/llm"
@@ -15,6 +16,7 @@ import (
 // testEnv holds all stores and helpers needed for API integration tests.
 type testEnv struct {
 	Router         http.Handler
+	DB             *sqlx.DB
 	LinkStore      *store.LinkStore
 	TagStore       *store.TagStore
 	OwnershipStore *store.OwnershipStore
@@ -60,6 +62,7 @@ func newTestEnvWithSuggester(t *testing.T, suggester llm.Suggester) *testEnv {
 	router := api.NewAPIRouter(deps)
 	return &testEnv{
 		Router:         router,
+		DB:             db,
 		LinkStore:      ls,
 		TagStore:       tags,
 		OwnershipStore: owns,

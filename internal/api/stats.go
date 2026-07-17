@@ -4,7 +4,6 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -129,29 +128,35 @@ func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse limit (default 50, max 200).
-	limit := 50
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if limit > 200 {
-		limit = 200
-	}
+	limit := parseLimit(r)
 
-	// Parse before cursor (ISO 8601 / RFC 3339 timestamp).
+	// Parse the before cursor. Accepts the opaque (clicked_at, id) keyset
+	// cursor issued in next_cursor, or — for backward compatibility with
+	// cursors issued before the ID tiebreaker existed — a bare ISO 8601 /
+	// RFC 3339 timestamp. Anything else is a 400.
+	// Governing: SPEC-0016 REQ "REST API Clicks Endpoint", SPEC-0005 REQ "Pagination"
 	var before time.Time
+	var beforeID string
 	if v := r.URL.Query().Get("before"); v != "" {
-		t, err := time.Parse(time.RFC3339Nano, v)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid before timestamp, expected RFC 3339", "BAD_REQUEST")
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			// Legacy timestamp-only cursor.
+			before = t
+		} else if ts, id := decodeCursor(v); ts != "" && id != "" {
+			t, err := time.Parse(time.RFC3339Nano, ts)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid before cursor", "BAD_REQUEST")
+				return
+			}
+			before = t
+			beforeID = id
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid before cursor, expected next_cursor value or RFC 3339 timestamp", "BAD_REQUEST")
 			return
 		}
-		before = t
 	}
 
 	// Fetch limit+1 to detect next page.
-	rows, err := h.clicks.ListRecentClicksBefore(r.Context(), link.ID, before, limit+1)
+	rows, err := h.clicks.ListRecentClicksBefore(r.Context(), link.ID, before, beforeID, limit+1)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
 		return
@@ -159,7 +164,8 @@ func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 
 	var nextCursor *string
 	if len(rows) > limit {
-		cursor := rows[limit-1].ClickedAt.Format(time.RFC3339Nano)
+		last := rows[limit-1]
+		cursor := encodeCursor(last.ClickedAt.Format(time.RFC3339Nano), last.ID)
 		nextCursor = &cursor
 		rows = rows[:limit]
 	}
