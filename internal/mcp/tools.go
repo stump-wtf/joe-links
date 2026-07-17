@@ -754,7 +754,14 @@ func getLinkStatsTool(deps Deps) sdk.ToolHandlerFor[statsIn, *statsOut] {
 
 		out := &statsOut{Link: link.Slug, Total: stats.Total, Last7d: stats.Last7d, Last30d: stats.Last30d, Recent: []recentClickPayload{}}
 		for _, c := range recent {
-			out.Recent = append(out.Recent, recentClickPayload{ClickedAt: c.ClickedAt, Referrer: c.Referrer, User: c.DisplayName})
+			p := recentClickPayload{ClickedAt: c.ClickedAt, Referrer: c.Referrer}
+			// Clicker attribution is manager-only, matching REST: authenticated
+			// clickers on a secure link proxy the hidden share roster.
+			// Governing: SPEC-0018 REQ "Authorization Parity with the REST API"
+			if caps.CanManageShares {
+				p.User = c.DisplayName
+			}
+			out.Recent = append(out.Recent, p)
 		}
 		return nil, out, nil
 	}

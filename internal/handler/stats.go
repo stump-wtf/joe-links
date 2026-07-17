@@ -19,6 +19,10 @@ type StatsPage struct {
 	Link         *store.Link
 	Stats        store.ClickStats
 	RecentClicks []store.RecentClick
+	// ShowClickers gates the per-click user column: attribution is
+	// manager-only because authenticated clickers on a secure link proxy the
+	// hidden share roster. See PR #255 security review.
+	ShowClickers bool
 }
 
 // StatsHandler serves the per-link analytics page.
@@ -89,6 +93,7 @@ func (h *StatsHandler) Show(w http.ResponseWriter, r *http.Request) {
 		Link:         link,
 		Stats:        stats,
 		RecentClicks: recent,
+		ShowClickers: caps.CanManageShares,
 	}
 
 	if isHTMX(r) {

@@ -27,6 +27,7 @@ type sharedAuthzEnv struct {
 	stranger  *store.User
 	admin     *store.User
 	link      *store.Link
+	clicks    *store.ClickStore
 }
 
 // newSharedAuthzEnv mirrors NewRouter's dashboard wiring with a secure link
@@ -82,7 +83,7 @@ func newSharedAuthzEnv(t *testing.T) *sharedAuthzEnv {
 	r.Post("/dashboard/links/{id}/owners", links.AddOwner)
 	r.Post("/dashboard/links/{id}/shares", links.AddShare)
 
-	return &sharedAuthzEnv{router: r, owner: owner, recipient: recipient, stranger: stranger, admin: admin, link: link}
+	return &sharedAuthzEnv{router: r, owner: owner, recipient: recipient, stranger: stranger, admin: admin, link: link, clicks: cs}
 }
 
 // do issues a request as the given user (nil = anonymous).
@@ -263,5 +264,37 @@ func TestLinkDetail_AdminKeepsControls(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "/dashboard/links/"+env.link.ID+"/edit") {
 		t.Error("admin detail missing Edit button")
+	}
+}
+
+// The web stats page hides the per-click user column from recipients:
+// clicker attribution on a secure link proxies the hidden share roster.
+// See PR #255 security review.
+func TestLinkStats_RecipientSeesNoClickerAttribution(t *testing.T) {
+	env := newSharedAuthzEnv(t)
+	if err := env.clicks.RecordClick(context.Background(), store.ClickEvent{
+		LinkID: env.link.ID, UserID: env.owner.ID, IPHash: "h1", UserAgent: "Test/1",
+	}); err != nil {
+		t.Fatalf("record click: %v", err)
+	}
+
+	ownerPage := env.do(t, http.MethodGet, "/dashboard/links/"+env.link.ID+"/stats", env.owner)
+	if ownerPage.Code != http.StatusOK {
+		t.Fatalf("owner stats status = %d, want 200", ownerPage.Code)
+	}
+	if !strings.Contains(ownerPage.Body.String(), "<th>User</th>") ||
+		!strings.Contains(ownerPage.Body.String(), env.owner.DisplayName) {
+		t.Errorf("owner stats page should show the clicker column and name")
+	}
+
+	recPage := env.do(t, http.MethodGet, "/dashboard/links/"+env.link.ID+"/stats", env.recipient)
+	if recPage.Code != http.StatusOK {
+		t.Fatalf("recipient stats status = %d, want 200", recPage.Code)
+	}
+	if strings.Contains(recPage.Body.String(), "<th>User</th>") {
+		t.Errorf("recipient stats page must not render the clicker column")
+	}
+	if strings.Contains(recPage.Body.String(), ">"+env.owner.DisplayName+"<") {
+		t.Errorf("recipient stats page must not render clicker display names")
 	}
 }

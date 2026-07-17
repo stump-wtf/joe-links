@@ -181,7 +181,11 @@ func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 			ref := rc.Referrer
 			cr.Referrer = &ref
 		}
-		if rc.UserID != "" {
+		// Clicker attribution is manager-only: for a secure link the set of
+		// authenticated clickers is a proxy for the share roster, which
+		// recipients deliberately cannot see. See PR #255 security review.
+		// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
+		if rc.UserID != "" && caps.CanManageShares {
 			cr.User = &clickUserRef{
 				ID:          rc.UserID,
 				DisplayName: rc.DisplayName,
