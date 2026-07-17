@@ -249,8 +249,10 @@ func (s *UserStore) CountPrimaryLinks(ctx context.Context, userID string) (int, 
 // user created to adminID, removes co-ownership rows.
 // linkAction "delete": deletes links where user is sole primary owner, deletes shares
 // the user created, removes co-ownership rows.
-// Shares the user created must be reassigned or deleted here because
-// link_shares.shared_by references users(id) with no ON DELETE action.
+// Shares the user created are reassigned or deleted explicitly here even though
+// link_shares.shared_by cascades on user delete (migration 00015): in reassign
+// mode the cascade would revoke recipients' access instead of preserving it,
+// and in delete mode the explicit statement keeps the intent visible.
 // The user record deletion cascades to api_tokens, sessions, and link_owners via FK constraints.
 // Governing: SPEC-0011 REQ "Admin User Deletion with Link Handling", REQ "Admin User Deletion Endpoint", ADR-0005
 func (s *UserStore) DeleteUserWithLinks(ctx context.Context, targetID, adminID, linkAction string) error {
@@ -316,8 +318,8 @@ func (s *UserStore) DeleteUserWithLinks(ctx context.Context, targetID, adminID, 
 			return err
 		}
 		// Shares on the deleted links cascade via link_id. Shares the target
-		// created on surviving links (co-owned, another user primary) must be
-		// removed explicitly.
+		// created on surviving links (co-owned, another user primary) are
+		// removed explicitly rather than left to the shared_by cascade.
 		_, err = tx.ExecContext(ctx,
 			tx.Rebind(`DELETE FROM link_shares WHERE shared_by = ?`), targetID)
 		if err != nil {

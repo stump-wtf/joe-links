@@ -150,17 +150,12 @@ func TestUpsert_SpecialCharacterSlug(t *testing.T) {
 }
 
 // newDeleteTestEnv builds the stores DeleteUserWithLinks tests need. The
-// shared harness leaves SQLite FK enforcement off, but these tests exercise
-// FK-sensitive deletion paths (link_shares.shared_by has no ON DELETE action),
-// so the pool is pinned to a single connection with foreign_keys=ON — the same
-// enforcement Postgres and MySQL apply unconditionally.
+// shared harness enables foreign_keys(1) on every pooled connection, so these
+// FK-sensitive deletion paths run under the same enforcement Postgres and
+// MySQL apply unconditionally.
 func newDeleteTestEnv(t *testing.T) (*sqlx.DB, *store.UserStore, *store.LinkStore) {
 	t.Helper()
 	db := testutil.NewTestDB(t)
-	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		t.Fatalf("enable foreign keys: %v", err)
-	}
 	owns := store.NewOwnershipStore(db)
 	tags := store.NewTagStore(db)
 	return db, store.NewUserStore(db), store.NewLinkStore(db, owns, tags)
@@ -501,6 +496,56 @@ func TestDeleteUserWithLinks_DeleteModeSolePrimary(t *testing.T) {
 	}
 	if _, err := us.GetByID(ctx, target.ID); err == nil {
 		t.Error("target user still exists after deletion")
+	}
+}
+
+// Schema-level backstop from issue #234: a user delete that bypasses
+// DeleteUserWithLinks (raw SQL, a future code path) while the user has shares
+// on surviving links must not be blocked by the link_shares.shared_by FK — the
+// share rows cascade away with the user and the link itself survives. Fails
+// with "FOREIGN KEY constraint failed" without migration 00015.
+func TestLinkSharesSharedByCascadesOnDirectUserDelete(t *testing.T) {
+	db, us, ls := newDeleteTestEnv(t)
+	ctx := context.Background()
+
+	owner, err := us.Upsert(ctx, "test", "owner", "owner@example.com", "Owner User", "")
+	if err != nil {
+		t.Fatalf("upsert owner: %v", err)
+	}
+	target, err := us.Upsert(ctx, "test", "target", "target@example.com", "Target User", "")
+	if err != nil {
+		t.Fatalf("upsert target: %v", err)
+	}
+	recipient, err := us.Upsert(ctx, "test", "recipient", "recipient@example.com", "Recipient User", "")
+	if err != nil {
+		t.Fatalf("upsert recipient: %v", err)
+	}
+
+	link, err := ls.Create(ctx, "surviving-link", "https://example.com", owner.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := ls.AddOwner(ctx, link.ID, target.ID); err != nil {
+		t.Fatalf("add target co-owner: %v", err)
+	}
+	if err := ls.AddShare(ctx, link.ID, recipient.ID, target.ID); err != nil {
+		t.Fatalf("add share: %v", err)
+	}
+
+	if _, err := db.ExecContext(ctx, db.Rebind(`DELETE FROM users WHERE id = ?`), target.ID); err != nil {
+		t.Fatalf("direct user delete blocked by shared_by FK: %v", err)
+	}
+
+	if n := countRows(t, db, `SELECT COUNT(*) FROM link_shares WHERE shared_by = ?`, target.ID); n != 0 {
+		t.Errorf("link_shares rows with shared_by=target = %d, want 0 (cascade)", n)
+	}
+	if _, err := ls.GetByID(ctx, link.ID); err != nil {
+		t.Errorf("surviving link should remain: %v", err)
+	}
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_owners WHERE link_id = ? AND user_id = ? AND is_primary = 1`,
+		link.ID, owner.ID); n != 1 {
+		t.Errorf("owner primary ownership rows = %d, want 1", n)
 	}
 }
 
