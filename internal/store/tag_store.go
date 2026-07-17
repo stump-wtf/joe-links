@@ -168,6 +168,33 @@ func (s *TagStore) ListWithCounts(ctx context.Context) ([]*TagWithCount, error) 
 	return tags, nil
 }
 
+// ListWithCountsVisible returns tags with ≥1 link visible to userID, with
+// counts restricted to visible links: public, owned/co-owned, or shared with
+// the user. Tags whose links are all invisible to the viewer are omitted.
+// Pass an empty userID for anonymous viewers (public links only). Admins see
+// everything and should use ListWithCounts instead.
+// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
+// Governing: SPEC-0004 REQ "Tag Browser" — zero-count tags MUST NOT appear
+func (s *TagStore) ListWithCountsVisible(ctx context.Context, userID string) ([]*TagWithCount, error) {
+	var tags []*TagWithCount
+	err := s.db.SelectContext(ctx, &tags, s.q(`
+		SELECT t.*, COUNT(DISTINCT lt.link_id) as link_count
+		FROM tags t
+		INNER JOIN link_tags lt ON lt.tag_id = t.id
+		INNER JOIN links l ON l.id = lt.link_id
+		LEFT JOIN link_owners lo ON lo.link_id = l.id AND lo.user_id = ?
+		LEFT JOIN link_shares ls ON ls.link_id = l.id AND ls.user_id = ?
+		WHERE l.visibility = 'public' OR lo.user_id IS NOT NULL OR ls.user_id IS NOT NULL
+		GROUP BY t.id
+		HAVING COUNT(DISTINCT lt.link_id) >= 1
+		ORDER BY t.name ASC
+	`), userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	return tags, nil
+}
+
 // ListWithCountsPaginated returns tags with ≥1 link, annotated with their link
 // count, ordered by (name, id) and keyset-paginated. Pass cursorName/cursorID
 // from the last row of the previous page (empty for the first page).

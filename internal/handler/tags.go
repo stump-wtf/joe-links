@@ -41,11 +41,26 @@ type TagDetailPage struct {
 	ShowTags       bool
 }
 
+// visibleUserID returns the user's ID, or "" for anonymous viewers so
+// visibility-filtered store queries match public links only.
+func visibleUserID(user *store.User) string {
+	if user == nil {
+		return ""
+	}
+	return user.ID
+}
+
 // Index renders all tags with ≥1 link and their counts.
 // Governing: SPEC-0004 REQ "Tag Browser"
 func (h *TagsHandler) Index(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
-	tags, _ := h.tags.ListWithCounts(r.Context())
+	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering", REQ "Admin Visibility Override"
+	var tags []*store.TagWithCount
+	if user != nil && user.IsAdmin() {
+		tags, _ = h.tags.ListWithCounts(r.Context())
+	} else {
+		tags, _ = h.tags.ListWithCountsVisible(r.Context(), visibleUserID(user))
+	}
 	data := TagIndexPage{
 		BasePage: newBasePage(r, user),
 		Tags:     tags,
@@ -67,7 +82,23 @@ func (h *TagsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	links, _ := h.links.ListByTag(r.Context(), slug)
+	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering", REQ "Admin Visibility Override"
+	var links []*store.Link
+	if user != nil && user.IsAdmin() {
+		links, _ = h.links.ListByTag(r.Context(), slug)
+	} else {
+		links, _ = h.links.ListVisibleByTag(r.Context(), slug, visibleUserID(user))
+		// A tag whose links are all invisible to the viewer must be
+		// indistinguishable from a tag that does not exist: rendering the
+		// page would confirm the tag's existence and canonical display name
+		// (a tag-existence oracle for slug probing). The visibility-filtered
+		// Index omits such tags entirely; Detail must match.
+		// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
+		if len(links) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+	}
 
 	data := TagDetailPage{
 		BasePage:       newBasePage(r, user),

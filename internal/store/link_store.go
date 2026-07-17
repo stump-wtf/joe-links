@@ -569,6 +569,28 @@ func (s *LinkStore) ListByTag(ctx context.Context, tagSlug string) ([]*Link, err
 	return links, nil
 }
 
+// ListVisibleByTag returns links with the given tag slug that userID may see:
+// public links, links they own or co-own, and links shared with them.
+// Pass an empty userID for anonymous viewers (public links only). Admins see
+// everything and should use ListByTag instead.
+// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
+func (s *LinkStore) ListVisibleByTag(ctx context.Context, tagSlug, userID string) ([]*Link, error) {
+	var links []*Link
+	err := s.db.SelectContext(ctx, &links, s.q(`
+		SELECT DISTINCT l.* FROM links l
+		INNER JOIN link_tags lt ON lt.link_id = l.id
+		INNER JOIN tags t ON t.id = lt.tag_id
+		LEFT JOIN link_owners lo ON lo.link_id = l.id AND lo.user_id = ?
+		LEFT JOIN link_shares ls ON ls.link_id = l.id AND ls.user_id = ?
+		WHERE t.slug = ? AND (l.visibility = 'public' OR lo.user_id IS NOT NULL OR ls.user_id IS NOT NULL)
+		ORDER BY l.slug ASC
+	`), userID, userID, tagSlug)
+	if err != nil {
+		return nil, err
+	}
+	return links, nil
+}
+
 // ListPublic returns paginated public links, optionally filtered by search query.
 // Returns the matching links and total count for pagination.
 // Governing: SPEC-0012 REQ "Public Link Browser (GET /links)", REQ "Public Link Search"

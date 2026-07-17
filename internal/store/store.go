@@ -30,6 +30,7 @@ type LinkStoreIface interface {
 	SetTags(ctx context.Context, linkID string, tagNames []string) error
 	ListTags(ctx context.Context, linkID string) ([]*Tag, error)
 	ListByTag(ctx context.Context, tagSlug string) ([]*Link, error)
+	ListVisibleByTag(ctx context.Context, tagSlug, userID string) ([]*Link, error)
 }
 
 // TagStoreIface exposes tag operations.

@@ -111,6 +111,89 @@ func TestTagStore_ListAll(t *testing.T) {
 	}
 }
 
+// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — tag cards and
+// counts must not leak other users' private/secure links (issue #193).
+func TestTagStore_ListWithCountsVisible(t *testing.T) {
+	ts, ls, us := newTagTestEnv(t)
+	ctx := context.Background()
+
+	owner, err := us.Upsert(ctx, "test", "sub-owner", "owner@example.com", "Owner", "")
+	if err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	viewer, err := us.Upsert(ctx, "test", "sub-viewer", "viewer@example.com", "Viewer", "")
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+
+	seed := func(slug, visibility string, tagNames ...string) *store.Link {
+		t.Helper()
+		l, err := ls.Create(ctx, slug, "https://example.com/"+slug, owner.ID, "", "", visibility)
+		if err != nil {
+			t.Fatalf("Create %q: %v", slug, err)
+		}
+		if err := ls.SetTags(ctx, l.ID, tagNames); err != nil {
+			t.Fatalf("SetTags %q: %v", slug, err)
+		}
+		return l
+	}
+	// "mixed" carries a public and a private link; "hidden" only invisible links.
+	seed("vc-public", "public", "mixed")
+	seed("vc-private", "private", "mixed", "hidden")
+	secure := seed("vc-secure", "secure", "hidden")
+
+	byMap := func(tags []*store.TagWithCount) map[string]int {
+		m := make(map[string]int, len(tags))
+		for _, tag := range tags {
+			m[tag.Slug] = tag.Count
+		}
+		return m
+	}
+
+	// Viewer: "mixed" counts only the public link; "hidden" is omitted entirely.
+	got, err := ts.ListWithCountsVisible(ctx, viewer.ID)
+	if err != nil {
+		t.Fatalf("ListWithCountsVisible(viewer): %v", err)
+	}
+	counts := byMap(got)
+	if len(counts) != 1 || counts["mixed"] != 1 {
+		t.Fatalf("viewer counts = %v, want map[mixed:1]", counts)
+	}
+
+	// Sharing the secure link surfaces "hidden" with count 1.
+	if err := ls.AddShare(ctx, secure.ID, viewer.ID, owner.ID); err != nil {
+		t.Fatalf("AddShare: %v", err)
+	}
+	got, err = ts.ListWithCountsVisible(ctx, viewer.ID)
+	if err != nil {
+		t.Fatalf("ListWithCountsVisible(viewer, shared): %v", err)
+	}
+	counts = byMap(got)
+	if len(counts) != 2 || counts["mixed"] != 1 || counts["hidden"] != 1 {
+		t.Fatalf("viewer counts after share = %v, want map[hidden:1 mixed:1]", counts)
+	}
+
+	// Owner sees full counts for their own links.
+	got, err = ts.ListWithCountsVisible(ctx, owner.ID)
+	if err != nil {
+		t.Fatalf("ListWithCountsVisible(owner): %v", err)
+	}
+	counts = byMap(got)
+	if counts["mixed"] != 2 || counts["hidden"] != 2 {
+		t.Fatalf("owner counts = %v, want map[hidden:2 mixed:2]", counts)
+	}
+
+	// Anonymous viewers count public links only.
+	got, err = ts.ListWithCountsVisible(ctx, "")
+	if err != nil {
+		t.Fatalf("ListWithCountsVisible(anonymous): %v", err)
+	}
+	counts = byMap(got)
+	if len(counts) != 1 || counts["mixed"] != 1 {
+		t.Fatalf("anonymous counts = %v, want map[mixed:1]", counts)
+	}
+}
+
 func TestTagStore_ListWithCounts(t *testing.T) {
 	ts, ls, us := newTagTestEnv(t)
 	ctx := context.Background()

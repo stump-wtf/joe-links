@@ -254,6 +254,113 @@ func TestLinkStore_ListByTag(t *testing.T) {
 	}
 }
 
+// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — tag pages must
+// only surface links the viewer may see (issue #193).
+func TestLinkStore_ListVisibleByTag(t *testing.T) {
+	ls, _, us, ownerID := newTestEnv(t)
+	ctx := context.Background()
+
+	viewer, err := us.Upsert(ctx, "test", "sub-viewer", "viewer@example.com", "Viewer", "")
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+
+	// Owner's links, all tagged "finance".
+	seed := func(slug, visibility string) *store.Link {
+		t.Helper()
+		l, err := ls.Create(ctx, slug, "https://example.com/"+slug, ownerID, "", "", visibility)
+		if err != nil {
+			t.Fatalf("Create %q: %v", slug, err)
+		}
+		if err := ls.SetTags(ctx, l.ID, []string{"finance"}); err != nil {
+			t.Fatalf("SetTags %q: %v", slug, err)
+		}
+		return l
+	}
+	seed("fin-public", "public")
+	seed("fin-private", "private")
+	secure := seed("fin-secure", "secure")
+
+	slugs := func(links []*store.Link) []string {
+		out := make([]string, 0, len(links))
+		for _, l := range links {
+			out = append(out, l.Slug)
+		}
+		return out
+	}
+
+	// (a)+(b)+(c) — another user sees the public link only.
+	got, err := ls.ListVisibleByTag(ctx, "finance", viewer.ID)
+	if err != nil {
+		t.Fatalf("ListVisibleByTag(viewer): %v", err)
+	}
+	if len(got) != 1 || got[0].Slug != "fin-public" {
+		t.Fatalf("viewer sees %v, want [fin-public] only", slugs(got))
+	}
+
+	// Anonymous viewers (empty userID) also see public only.
+	got, err = ls.ListVisibleByTag(ctx, "finance", "")
+	if err != nil {
+		t.Fatalf("ListVisibleByTag(anonymous): %v", err)
+	}
+	if len(got) != 1 || got[0].Slug != "fin-public" {
+		t.Fatalf("anonymous sees %v, want [fin-public] only", slugs(got))
+	}
+
+	// (c) — sharing the secure link makes it visible to the viewer.
+	if err := ls.AddShare(ctx, secure.ID, viewer.ID, ownerID); err != nil {
+		t.Fatalf("AddShare: %v", err)
+	}
+	got, err = ls.ListVisibleByTag(ctx, "finance", viewer.ID)
+	if err != nil {
+		t.Fatalf("ListVisibleByTag(viewer, shared): %v", err)
+	}
+	if len(got) != 2 || got[0].Slug != "fin-public" || got[1].Slug != "fin-secure" {
+		t.Fatalf("viewer with share sees %v, want [fin-public fin-secure]", slugs(got))
+	}
+
+	// (d) — the owner sees all of their own links regardless of visibility.
+	got, err = ls.ListVisibleByTag(ctx, "finance", ownerID)
+	if err != nil {
+		t.Fatalf("ListVisibleByTag(owner): %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("owner sees %v, want all 3", slugs(got))
+	}
+
+	// (d) — a co-owner also sees the private/secure links.
+	coOwner, err := us.Upsert(ctx, "test", "sub-coowner", "coowner@example.com", "CoOwner", "")
+	if err != nil {
+		t.Fatalf("seed co-owner: %v", err)
+	}
+	for _, l := range got {
+		if l.Slug == "fin-private" {
+			if err := ls.AddOwner(ctx, l.ID, coOwner.ID); err != nil {
+				t.Fatalf("AddOwner: %v", err)
+			}
+		}
+	}
+	coGot, err := ls.ListVisibleByTag(ctx, "finance", coOwner.ID)
+	if err != nil {
+		t.Fatalf("ListVisibleByTag(co-owner): %v", err)
+	}
+	if len(coGot) != 2 || coGot[0].Slug != "fin-private" || coGot[1].Slug != "fin-public" {
+		t.Fatalf("co-owner sees %v, want [fin-private fin-public]", slugs(coGot))
+	}
+
+	// (e) — viewer who is both owner and share recipient gets no duplicate rows.
+	if err := ls.AddShare(ctx, secure.ID, ownerID, ownerID); err != nil {
+		t.Fatalf("AddShare(owner): %v", err)
+	}
+	got, err = ls.ListVisibleByTag(ctx, "finance", ownerID)
+	if err != nil {
+		t.Fatalf("ListVisibleByTag(owner, self-share): %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("owner with self-share sees %v, want 3 distinct rows", slugs(got))
+	}
+}
+
 // Governing: SPEC-0002 REQ "Multi-Ownership via link_owners" — created_at column populated on insert.
 func TestLinkStore_Create_OwnerCreatedAt(t *testing.T) {
 	db := testutil.NewTestDB(t)
