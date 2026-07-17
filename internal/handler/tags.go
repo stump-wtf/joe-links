@@ -33,6 +33,7 @@ type TagDetailPage struct {
 	BasePage
 	Tag            *store.Tag
 	Links          []*store.Link
+	Query          string // unused; present for shared link_list partial compatibility
 	ShowVisibility bool
 	ShowActions    bool
 	ShowTitle      bool

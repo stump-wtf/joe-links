@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -103,6 +104,90 @@ func TestProfilePageRenders(t *testing.T) {
 	body := rr.Body.String()
 	if !strings.Contains(body, "table") || !strings.Contains(body, link.Slug) {
 		t.Fatalf("profile page should render link_list table with the link; body=%s", body)
+	}
+}
+
+// Governing: SPEC-0014 REQ "Abstract Link Widget" — every page struct that feeds
+// the shared link_list partial must render its empty-state branch, which
+// evaluates $.Query and $.Tag. A struct missing either field crashes mid-render
+// (issue #194: TagDetailPage lacked Query, so tags with zero links 500'd).
+func TestLinkListEmptyState_AllPageStructs(t *testing.T) {
+	cases := []struct {
+		name     string
+		path     string
+		data     func(r *http.Request) any
+		want     string
+		dontWant string
+	}{
+		{
+			name: "tag detail with zero links",
+			path: "/tags/dead-tag",
+			data: func(r *http.Request) any {
+				return TagDetailPage{
+					BasePage: newBasePage(r, nil),
+					Tag:      &store.Tag{ID: "t1", Name: "dead-tag", Slug: "dead-tag"},
+				}
+			},
+			want: "No matching links",
+		},
+		{
+			name: "dashboard with no links",
+			path: "/dashboard",
+			data: func(r *http.Request) any {
+				return DashboardPage{BasePage: newBasePage(r, nil)}
+			},
+			want: "No links yet",
+		},
+		{
+			name: "dashboard with query and no results",
+			path: "/dashboard?q=nope",
+			data: func(r *http.Request) any {
+				return DashboardPage{BasePage: newBasePage(r, nil), Query: "nope"}
+			},
+			want: "No matching links",
+		},
+		{
+			name: "admin with no links",
+			path: "/admin/links",
+			data: func(r *http.Request) any {
+				return AdminLinksPage{BasePage: newBasePage(r, nil)}
+			},
+			want:     "No links have been created yet",
+			dontWant: "Create a link",
+		},
+		{
+			name: "profile with no links",
+			path: "/u/alice",
+			data: func(r *http.Request) any {
+				return ProfilePage{BasePage: newBasePage(r, nil)}
+			},
+			want: "No links yet",
+		},
+		{
+			name: "public browser with no results",
+			path: "/links?q=nope",
+			data: func(r *http.Request) any {
+				return PublicLinksPage{BasePage: newBasePage(r, nil), Query: "nope"}
+			},
+			want: "No matching links",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", tc.path, nil)
+			rr := httptest.NewRecorder()
+			renderFragment(rr, "link_list", tc.data(r))
+			body := rr.Body.String()
+			if strings.Contains(body, "template error") {
+				t.Fatalf("link_list crashed on empty %s: %s", tc.name, body)
+			}
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("expected empty-state copy %q; body=%s", tc.want, body)
+			}
+			if tc.dontWant != "" && strings.Contains(body, tc.dontWant) {
+				t.Errorf("unexpected copy %q; body=%s", tc.dontWant, body)
+			}
+		})
 	}
 }
 
