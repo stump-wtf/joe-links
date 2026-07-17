@@ -20,8 +20,14 @@ clean:
 tidy:
 	go mod tidy
 
+# swag is pinned to the exact version go.mod requires — the version that
+# generated the committed docs/swagger/. Keep SWAG_VERSION in sync with the
+# github.com/swaggo/swag entry in go.mod (internal/packaging/ci_test.go
+# enforces the match). See issue #213.
+SWAG_VERSION := v1.16.6
+
 swagger:
-	swag init -g internal/api/main_annotations.go -o docs/swagger --outputTypes json,yaml,go --parseDependency --parseInternal
+	go run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init -g internal/api/main_annotations.go -o docs/swagger --outputTypes json,yaml,go --parseDependency --parseInternal
 
 dev:
 	docker compose -f docker-compose.dev.yml up -d

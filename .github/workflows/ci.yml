@@ -2,10 +2,27 @@ name: CI/CD
 
 on:
   push:
+    # Every branch push must trigger CI: this repo is developed via Gitea PRs
+    # and this workflow only runs on the GitHub push mirror, so branch push
+    # runs are the merge gate. Do NOT narrow these branches — duplicate runs
+    # are deduped by the concurrency group below instead. See issue #213.
     branches: ["**"]
     tags: ["v*.*.*"]
   pull_request:
     branches: ["main"]
+  # Manual lever: rerun CI or re-publish docs from main without a new commit.
+  workflow_dispatch:
+
+# A push run and a pull_request run for the same commit share a group, so the
+# duplicate is cancelled instead of running lint+test twice. Tag runs and main
+# runs are keyed by ref, not SHA: each gets a group no branch push or PR can
+# join (a new branch whose head equals main's head would otherwise cancel the
+# in-flight main run and silently lose its docs deploy), and tag runs are
+# additionally never cancelled so an in-flight release cannot be killed by a
+# branch push. See issue #213 and PR #250 review.
+concurrency:
+  group: ci-${{ (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main') && github.ref || github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   lint:
@@ -25,15 +42,21 @@ jobs:
           # required for repos with a go >= 1.25 directive. See issue #213.
           version: v2.11.4
 
-      - name: Install swag
-        run: go install github.com/swaggo/swag/cmd/swag@latest
-
       - name: Check swagger spec is up to date
         # Governing: SPEC-0007 REQ "Spec Freshness in CI"
+        # `make swagger` runs swag via `go run ...@$(SWAG_VERSION)`, pinned to
+        # the go.mod version that generated the committed output — no unpinned
+        # go-install that would break every run when a newer swag release
+        # changes the generated output. See issue #213.
         run: |
           make swagger
           if ! git diff --exit-code docs/swagger/; then
             echo "::error::docs/swagger/ is stale. Run 'make swagger' and commit the result."
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain docs/swagger/)" ]; then
+            echo "::error::docs/swagger/ has untracked files. Run 'make swagger' and commit the result."
+            git status --porcelain docs/swagger/
             exit 1
           fi
 
@@ -42,7 +65,9 @@ jobs:
           node-version: '20'
 
       - name: Lint extension (AMO addons-linter)
-        run: npx addons-linter@latest integrations/extension/ --min-manifest-version 3 --max-manifest-version 3 --warnings-as-errors=false
+        # Pinned (not "latest") so lint results are reproducible, same as
+        # golangci-lint above. See issue #213.
+        run: npx addons-linter@10.9.0 integrations/extension/ --min-manifest-version 3 --max-manifest-version 3 --warnings-as-errors=false
 
       - name: Validate extension JS syntax
         run: |
@@ -64,6 +89,15 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run extension unit tests
+        # The shell expands the glob to explicit file paths, so this works on
+        # Node < 21 (node --test only learned glob patterns in Node 21).
+        run: node --test integrations/extension/*.test.mjs
 
   build:
     name: Build & Release
@@ -106,10 +140,14 @@ jobs:
           done
 
       - name: Package browser extension
+        # icons/generate*.js are Node dev scripts, not extension code — AMO
+        # flags unreferenced files in the package. Note the explicit file list
+        # silently omits any newly added extension file (see PR #238).
         run: |
           cd integrations/extension
           zip -r ../../dist/joe-links-extension.zip \
-            manifest.json background.js options.html options.js popup.html popup.js icons/
+            manifest.json background.js options.html options.js popup.html popup.js icons/ \
+            -x "icons/generate*"
           echo "Packaged extension"
 
       - name: Create GitHub Release
@@ -147,7 +185,12 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+          # latest=auto only moves :latest for non-prerelease semver tags, so
+          # a v1.2.3-rc.1 tag no longer overwrites :latest (deferred from
+          # PR #236 to issue #213). Previously a raw "latest" tag entry
+          # applied it unconditionally to every tag build.
+          flavor: |
+            latest=auto
 
       - uses: docker/build-push-action@v6
         with:
@@ -166,7 +209,18 @@ jobs:
   docs:
     name: GitHub Pages
     needs: [lint, test]
-    if: startsWith(github.ref, 'refs/tags/')
+    # Deploy on releases AND on main (push or workflow_dispatch), so docs and
+    # spec changes merged to main publish without waiting for the next tag.
+    # PR runs never match: their ref is refs/pull/N/merge. See issue #213.
+    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+    # The release flow (merge to main, then tag the merge commit) fires two
+    # runs in different ci-* groups, each reaching this job. GitHub Pages
+    # allows only one in-flight deployment, so the later deploy-pages call
+    # would 409 without serializing deployments here. Queue behind an
+    # in-flight deploy; never cancel it. See PR #250 review.
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
