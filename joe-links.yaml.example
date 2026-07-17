@@ -14,6 +14,10 @@ oidc:
   client_id: joe-links-dev
   client_secret: dev-secret-not-for-production
   redirect_url: http://localhost/auth/callback
+  # Comma-separated OIDC group names that also grant the admin role.
+  # admin_groups: admins,sre
+  # OIDC claim to read group membership from (default: groups).
+  # groups_claim: groups
 
 # Your email must match a staticPasswords entry in dev/dex.yaml to get admin role.
 admin_email: admin@example.com
@@ -21,7 +25,22 @@ admin_email: admin@example.com
 # Disable Secure flag on cookies so sessions work over plain HTTP locally.
 insecure_cookies: true
 
-session_lifetime: 720h
+# Session absolute expiry. NOTE: the key is nested (session.lifetime) —
+# a flat session_lifetime does not bind.
+session:
+  lifetime: 720h
+
+# Short-link keyword prefix shown in the UI, e.g. "go".
+# Defaults to the first DNS label of the request host.
+# short_keyword: go
+
+# --- LLM slug suggestions (optional — omit provider to disable) ---
+# llm:
+#   provider: anthropic        # "anthropic", "openai", or "openai-compatible"
+#   api_key: YOUR_API_KEY
+#   model: claude-haiku-4-5-20251001   # optional (defaults: claude-haiku-4-5-20251001 / gpt-4o-mini)
+#   base_url: https://api.openai.com   # openai-compatible providers only
+#   prompt: ""                 # custom prompt template text (overrides built-in default)
 
 # --- Production (Google OIDC) ---
 # oidc:

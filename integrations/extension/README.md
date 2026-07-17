@@ -12,13 +12,13 @@ The extension uses Manifest V3 and works across modern Chromium and Gecko browse
 
 1. Open `chrome://extensions`
 2. Enable **Developer mode** (toggle in the top-right corner)
-3. Click **Load unpacked** and select the `extension/` directory
+3. Click **Load unpacked** and select the `integrations/extension/` directory
 
 ### Firefox
 
 1. Open `about:debugging#/runtime/this-firefox`
 2. Click **Load Temporary Add-on...**
-3. Select `manifest.json` from the `extension/` directory
+3. Select `manifest.json` from the `integrations/extension/` directory
 
 > **Note on background scripts**: Firefox supported `background.scripts` (not `service_worker`) in MV3 until v128, with `service_worker` becoming the default in v133+. The manifest declares both so the extension works across all versions. Chrome ignores `background.scripts`; older Firefox ignores `service_worker`.
 
@@ -28,11 +28,13 @@ Firefox 113+ is required — this is the `strict_min_version` enforced by `manif
 
 ### Safari
 
-Safari requires converting the extension using Xcode's tooling:
+A Safari Web Extension Xcode project is already checked in at `integrations/apple/` — it references this directory directly, so there is no `safari-web-extension-converter` step:
 
 1. Install Xcode from the Mac App Store
-2. Run: `xcrun safari-web-extension-converter /path/to/extension/`
-3. Build and run the generated Xcode project
-4. Enable the extension in Safari > Settings > Extensions
+2. Open `integrations/apple/joe-links.xcodeproj` (or run `make ext-safari` from the repo root)
+3. Build and run the iOS or macOS scheme (⌘R)
+4. Enable the extension in Safari > Settings > Extensions (on macOS you may need **Develop → Allow Unsigned Extensions** first)
+
+After a code change here, just rebuild in Xcode — no conversion or re-import needed.
 
 See SPEC-0008 REQ "Cross-Browser Packaging" and ADR-0012 for architectural context.

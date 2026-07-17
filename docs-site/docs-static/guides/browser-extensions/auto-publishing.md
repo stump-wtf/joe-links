@@ -6,10 +6,14 @@ sidebar_position: 2
 
 # Auto-Publishing to Chrome & Firefox Stores
 
-joe-links can automatically publish new extension versions to the Chrome Web Store and Firefox Add-ons (AMO) when you push a version tag. This guide walks you through setting up the required API credentials for each store.
+joe-links will automatically publish new extension versions to the Chrome Web Store and Firefox Add-ons (AMO) when you push a version tag, once the publish jobs land in CI. This guide walks you through setting up the required API credentials for each store ahead of time.
+
+:::warning Not wired up yet
+The CI publish jobs described here are **planned, not implemented** — there are no `publish-chrome` / `publish-firefox` jobs in `.github/workflows/ci.yml` today. Store publishing is tracked in [#219 (Chrome Web Store)](https://github.com/joestump/joe-links/issues/219) and [#220 (Firefox Add-ons)](https://github.com/joestump/joe-links/issues/220). The credential setup below is real and can be done now; the workflow YAML further down is a draft for those issues.
+:::
 
 :::info First submission is manual
-Both stores require the initial extension submission to be uploaded manually through their web dashboards. The automated workflow only handles **updates** to an already-listed extension.
+Both stores require the initial extension submission to be uploaded manually through their web dashboards. The automated workflow will only handle **updates** to an already-listed extension.
 :::
 
 ---
@@ -106,9 +110,9 @@ You do not need to store this as a secret — it's in the manifest. But it must 
 
 ---
 
-## GitHub Actions workflow
+## GitHub Actions workflow (draft)
 
-Once the secrets are configured, add these jobs to your CI/CD workflow (`.github/workflows/ci.yml`). They run on version tag pushes alongside the existing release job:
+The jobs below are a **draft/reference** for [#219](https://github.com/joestump/joe-links/issues/219) and [#220](https://github.com/joestump/joe-links/issues/220) — they are not yet part of `.github/workflows/ci.yml`. Once the secrets are configured and the jobs land, they will run on version tag pushes alongside the existing release job:
 
 ```yaml
 publish-chrome:
@@ -157,18 +161,18 @@ publish-firefox:
 
 ---
 
-## Publishing flow
+## Publishing flow (once #219/#220 land)
 
 1. Update the extension version in `integrations/extension/manifest.json`
 2. Commit and tag a release:
    ```bash
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
-3. The CI workflow:
-   - Runs lint and tests
-   - Packages the extension zip
-   - Uploads to Chrome Web Store and submits for review
-   - Uploads to Firefox Add-ons and submits for review
+3. The CI workflow will:
+   - Run lint and tests
+   - Package the extension zip
+   - Upload to Chrome Web Store and submit for review
+   - Upload to Firefox Add-ons and submit for review
 4. Both stores review the update (minutes to a few days)
 
 :::note Version numbers must be unique

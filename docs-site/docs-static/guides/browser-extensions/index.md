@@ -8,7 +8,7 @@ sidebar_position: 1
 
 The joe-links browser extension intercepts bare-hostname navigation — so typing `go/slack` in your address bar redirects through your joe-links server without needing a trailing slash or `http://` prefix.
 
-Extensions are available for **Chrome/Chromium**, **Firefox**, and **Safari** (via `xcrun safari-web-extension-converter`). The source lives in the `integrations/extension/` directory of the repository as a [Manifest V3](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3) extension.
+Extensions are available for **Chrome/Chromium**, **Firefox**, and **Safari** (via the checked-in Xcode project at `integrations/apple/` — no conversion step needed). The source lives in the `integrations/extension/` directory of the repository as a [Manifest V3](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3) extension.
 
 ## Prerequisites
 
