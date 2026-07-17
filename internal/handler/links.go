@@ -61,6 +61,12 @@ type LinkDetailPage struct {
 	Owners []*store.OwnerInfo
 	Shares []ShareUser
 	Error  string
+	// Capability gates: share recipients view the page read-only, so every
+	// mutating control renders only for owners/co-owners/admins.
+	// Governing: SPEC-0010 REQ "Link Shares Table" — recipients are read-only
+	CanEdit   bool // Edit button
+	CanDelete bool // Delete button + confirm modal
+	CanManage bool // owner add/remove controls and the shares panel
 }
 
 // ShareUser combines share record with user display info for templates.

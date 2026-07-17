@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/joestump/joe-links/internal/auth"
@@ -27,20 +28,37 @@ type DashboardPage struct {
 	ShowOwner      bool // show Owner(s) column
 	ShowTags       bool // show Tags column
 	ShowVisibility bool // show Visibility column
-	ShowActions    bool // show Edit/Delete action buttons
+	ShowActions    bool // show the actions column at all
+	// RowCaps maps link ID → the viewer's capabilities for that row, so lists
+	// mixing rows with differing rights (e.g. ?filter=shared) never render
+	// dead action buttons.
+	// Governing: SPEC-0010 REQ "Link Shares Table" — recipients are read-only
+	RowCaps map[string]store.LinkCaps
 }
 
 // DashboardHandler serves the authenticated link management dashboard.
 type DashboardHandler struct {
 	links    *store.LinkStore
+	owns     *store.OwnershipStore
 	tags     *store.TagStore
 	keywords *store.KeywordStore
 }
 
 // NewDashboardHandler creates a new DashboardHandler.
 // Governing: SPEC-0004 REQ "User Dashboard"
-func NewDashboardHandler(ls *store.LinkStore, ts *store.TagStore, ks *store.KeywordStore) *DashboardHandler {
-	return &DashboardHandler{links: ls, tags: ts, keywords: ks}
+func NewDashboardHandler(ls *store.LinkStore, os *store.OwnershipStore, ts *store.TagStore, ks *store.KeywordStore) *DashboardHandler {
+	return &DashboardHandler{links: ls, owns: os, tags: ts, keywords: ks}
+}
+
+// buildRowCaps resolves per-row link capabilities for the viewer.
+// Governing: SPEC-0002 REQ "Authorization Based on Ownership"
+// Governing: SPEC-0010 REQ "Link Shares Table"
+func buildRowCaps(ctx context.Context, owns *store.OwnershipStore, ls *store.LinkStore, user *store.User, links []*store.Link) (map[string]store.LinkCaps, error) {
+	ids := make([]string, len(links))
+	for i, l := range links {
+		ids[i] = l.ID
+	}
+	return store.LinkCapsForAll(ctx, owns, ls, ids, user)
 }
 
 // Show renders the dashboard with the user's links (or all links for admins).
@@ -90,6 +108,16 @@ func (h *DashboardHandler) Show(w http.ResponseWriter, r *http.Request) {
 	// Load all tags for the tag filter chips
 	allTags, _ := h.tags.ListAll(r.Context())
 
+	// Per-row capabilities: the "Shared with me" filter (and admin's all-links
+	// view) mixes rows the viewer can and cannot act on, so each row renders
+	// only the actions the viewer may actually perform.
+	// Governing: SPEC-0010 REQ "Link Shares Table" — recipients are read-only
+	rowCaps, err := buildRowCaps(r.Context(), h.owns, h.links, user, links)
+	if err != nil {
+		http.Error(w, "could not load links", http.StatusInternalServerError)
+		return
+	}
+
 	data := DashboardPage{
 		BasePage:    newBasePage(r, user),
 		User:        user,
@@ -99,6 +127,7 @@ func (h *DashboardHandler) Show(w http.ResponseWriter, r *http.Request) {
 		Tag:         tagSlug,
 		Filter:      filter,
 		ShowActions: true,
+		RowCaps:     rowCaps,
 	}
 
 	if isHTMX(r) {

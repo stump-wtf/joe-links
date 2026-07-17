@@ -120,7 +120,7 @@ func registerTools(s *sdk.Server, deps Deps) {
 
 	addTool(s, &sdk.Tool{
 		Name:        "get_link_stats",
-		Description: "Click totals (all-time, 7d, 30d) and recent clicks for a link you own.",
+		Description: "Click totals (all-time, 7d, 30d) and recent clicks for a link you own or that is shared with you.",
 	}, getLinkStatsTool(deps))
 
 	// Governing: SPEC-0018 REQ "Conditional Suggestion Tool"
@@ -178,20 +178,15 @@ func resolveLink(ctx context.Context, deps Deps, ref string) (*store.Link, *sdk.
 // and admins.
 // Governing: SPEC-0018 REQ "Authorization Parity with the REST API"
 func isOwnerOrAdmin(deps Deps, user *store.User, linkID string) (bool, error) {
-	if user.Role == "admin" {
-		return true, nil
-	}
-	return deps.OwnershipStore.IsOwner(linkID, user.ID)
+	return store.IsOwnerOrAdmin(deps.OwnershipStore, linkID, user.ID, user.Role)
 }
 
-// canRead mirrors REST GET /links/{id}: owner OR share recipient OR admin.
+// linkCaps resolves the caller's capability set via the shared store helper so
+// MCP can never drift from the REST/web matrix.
 // Governing: SPEC-0018 REQ "Authorization Parity with the REST API"
-func canRead(ctx context.Context, deps Deps, user *store.User, linkID string) (bool, error) {
-	ok, err := isOwnerOrAdmin(deps, user, linkID)
-	if err != nil || ok {
-		return ok, err
-	}
-	return deps.LinkStore.HasShare(ctx, linkID, user.ID)
+// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
+func linkCaps(ctx context.Context, deps Deps, user *store.User, linkID string) (store.LinkCaps, error) {
+	return store.LinkCapsFor(ctx, deps.OwnershipStore, deps.LinkStore, linkID, user)
 }
 
 // buildLinkPayload assembles the full link result, including owners and — for
@@ -364,19 +359,16 @@ func getLinkTool(deps Deps) sdk.ToolHandlerFor[linkRefIn, *linkPayload] {
 			return errRes, nil, nil
 		}
 
-		ok, err := canRead(ctx, deps, user, link.ID)
+		caps, err := linkCaps(ctx, deps, user, link.ID)
 		if err != nil {
 			return internalError("authorize read", err), nil, nil
 		}
-		if !ok {
+		if !caps.CanView {
 			return errorResult(codeForbidden, "you do not have access to this link"), nil, nil
 		}
 
-		owner, err := isOwnerOrAdmin(deps, user, link.ID)
-		if err != nil {
-			return internalError("authorize read", err), nil, nil
-		}
-		p, err := buildLinkPayload(ctx, deps, link, owner)
+		// Share roster is visible to share managers only, never to recipients.
+		p, err := buildLinkPayload(ctx, deps, link, caps.CanManageShares)
 		if err != nil {
 			return internalError("build link result", err), nil, nil
 		}
@@ -732,14 +724,15 @@ func getLinkStatsTool(deps Deps) sdk.ToolHandlerFor[statsIn, *statsOut] {
 		if errRes != nil {
 			return errRes, nil, nil
 		}
-		// REST stats rule: owners and admins only.
+		// REST stats rule: owners, share recipients, and admins may read stats.
 		// Governing: SPEC-0018 REQ "Authorization Parity with the REST API"
-		ok, err := isOwnerOrAdmin(deps, user, link.ID)
+		// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
+		caps, err := linkCaps(ctx, deps, user, link.ID)
 		if err != nil {
 			return internalError("authorize stats", err), nil, nil
 		}
-		if !ok {
-			return errorResult(codeForbidden, "only owners and admins may view stats"), nil, nil
+		if !caps.CanStats {
+			return errorResult(codeForbidden, "only owners, share recipients, and admins may view stats"), nil, nil
 		}
 
 		limit := in.Limit

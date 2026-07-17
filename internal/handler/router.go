@@ -91,9 +91,9 @@ func NewRouter(deps Deps) http.Handler {
 
 	// Authenticated routes
 	// Governing: SPEC-0004 REQ "Route Registration and Priority" — dashboard, link, and tag routes
-	dashboard := NewDashboardHandler(deps.LinkStore, deps.TagStore, deps.KeywordStore)
+	dashboard := NewDashboardHandler(deps.LinkStore, deps.OwnershipStore, deps.TagStore, deps.KeywordStore)
 	links := NewLinksHandler(deps.LinkStore, deps.OwnershipStore, deps.UserStore, deps.KeywordStore)
-	tags := NewTagsHandler(deps.TagStore, deps.LinkStore, deps.KeywordStore)
+	tags := NewTagsHandler(deps.TagStore, deps.LinkStore, deps.OwnershipStore, deps.KeywordStore)
 	tokensWeb := NewTokensHandler(deps.TokenStore)
 	// Governing: SPEC-0016 REQ "Link Stats Dashboard Page", ADR-0016
 	statsHandler := NewStatsHandler(deps.LinkStore, deps.ClickStore, deps.OwnershipStore)

@@ -489,7 +489,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: Returns a single link by ID. Only owners and admins may access.
+      description: Returns a single link by ID. Owners, share recipients, and admins
+        may access.
       parameters:
       - description: Link ID
         in: path

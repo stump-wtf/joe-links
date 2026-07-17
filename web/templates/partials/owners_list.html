@@ -25,7 +25,9 @@
                         </div>
                     </td>
                     <td class="text-right">
-                        {{if not .IsPrimary}}
+                        <!-- Governing: SPEC-0010 REQ "Link Shares Table" — owner management
+                             is capability-gated; share recipients see a read-only list. -->
+                        {{if and $.CanManage (not .IsPrimary)}}
                         <button class="btn btn-xs btn-ghost btn-error"
                                 hx-delete="/dashboard/links/{{$.Link.ID}}/owners/{{.ID}}"
                                 hx-target="#owners-section"
@@ -38,6 +40,7 @@
         </table>
     </div>
 
+    {{if .CanManage}}
     <form hx-post="/dashboard/links/{{.Link.ID}}/owners"
           hx-target="#owners-section"
           hx-swap="outerHTML"
@@ -46,5 +49,6 @@
                placeholder="Add co-owner by email" required>
         <button type="submit" class="btn btn-sm btn-primary">Add</button>
     </form>
+    {{end}}
 </div>
 {{end}}

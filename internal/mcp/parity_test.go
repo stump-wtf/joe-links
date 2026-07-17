@@ -106,10 +106,14 @@ func TestAuthorizationParityWithREST(t *testing.T) {
 	}
 
 	// expected[op] per principal order above.
+	// Governing: SPEC-0010 REQ "Link Shares Table" — share recipients are
+	// read-only: they may read the link, its stats, and its clicks on BOTH
+	// surfaces, and may mutate on NEITHER.
 	expected := map[string][]bool{
 		"read":          {true, true, true, false, true},
 		"update":        {true, true, false, false, true},
-		"stats":         {true, true, false, false, true},
+		"stats":         {true, true, true, false, true},
+		"clicks":        {true, true, true, false, true},
 		"manage-shares": {true, true, false, false, true},
 		"delete":        {true, true, false, false, true},
 	}
@@ -174,6 +178,17 @@ func TestAuthorizationParityWithREST(t *testing.T) {
 			},
 			rest: func(t *testing.T, tok string, l *store.Link) int {
 				return restCall(t, env, tok, http.MethodGet, "/links/"+l.ID+"/stats", nil)
+			},
+		},
+		{
+			// MCP folds recent clicks into get_link_stats; REST serves them at
+			// /links/{id}/clicks. Same capability, so they must agree.
+			name: "clicks",
+			mcp: func(t *testing.T, tok string, l *store.Link) bool {
+				return mcpAllowed(t, tok, "get_link_stats", map[string]any{"link": l.ID})
+			},
+			rest: func(t *testing.T, tok string, l *store.Link) int {
+				return restCall(t, env, tok, http.MethodGet, "/links/"+l.ID+"/clicks", nil)
 			},
 		},
 		{

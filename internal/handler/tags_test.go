@@ -48,7 +48,7 @@ func newTagsTestEnv(t *testing.T) *tagsTestEnv {
 
 	return &tagsTestEnv{
 		ls:    ls,
-		h:     NewTagsHandler(tags, ls, ks),
+		h:     NewTagsHandler(tags, ls, owns, ks),
 		owner: owner,
 		other: other,
 		admin: admin,

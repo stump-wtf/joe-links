@@ -56,20 +56,19 @@ func (h *StatsHandler) Show(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check ownership: user must be owner/co-owner or admin
+	// Owners/co-owners/admins and share recipients may view stats (read-only).
 	// Governing: SPEC-0016 REQ "Link Stats Dashboard Page"
-	if !user.IsAdmin() {
-		isOwner, err := h.owns.IsOwner(link.ID, user.ID)
-		if err != nil {
-			log.Printf("stats: IsOwner check failed for link %s user %s: %v", link.ID, user.ID, err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		if !isOwner {
-			// Governing: SPEC-0016 REQ "Link Stats Dashboard Page" — styled 403, not bare text
-			RenderForbidden(w, r)
-			return
-		}
+	// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
+	caps, err := store.LinkCapsFor(r.Context(), h.owns, h.links, link.ID, user)
+	if err != nil {
+		log.Printf("stats: capability check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !caps.CanStats {
+		// Governing: SPEC-0016 REQ "Link Stats Dashboard Page" — styled 403, not bare text
+		RenderForbidden(w, r)
+		return
 	}
 
 	stats, err := h.clicks.GetClickStats(r.Context(), link.ID)
