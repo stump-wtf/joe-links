@@ -35,7 +35,7 @@ func registerUserRoutes(r chi.Router) {
 func (h *usersAPIHandler) Me(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 

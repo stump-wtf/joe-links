@@ -53,7 +53,7 @@ type clickListResponse struct {
 func (h *statsAPIHandler) GetStats(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -61,10 +61,10 @@ func (h *statsAPIHandler) GetStats(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -73,17 +73,17 @@ func (h *statsAPIHandler) GetStats(w http.ResponseWriter, r *http.Request) {
 	// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
 	caps, err := store.LinkCapsFor(r.Context(), h.owns, h.links, link.ID, user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 	if !caps.CanStats {
-		writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+		writeError(w, http.StatusForbidden, "forbidden", CodeForbidden)
 		return
 	}
 
 	stats, err := h.clicks.GetClickStats(r.Context(), link.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -101,7 +101,7 @@ func (h *statsAPIHandler) GetStats(w http.ResponseWriter, r *http.Request) {
 func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -109,10 +109,10 @@ func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -121,11 +121,11 @@ func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 	// Governing: SPEC-0010 REQ "Link Shares Table" — recipients get read-only access
 	caps, err := store.LinkCapsFor(r.Context(), h.owns, h.links, link.ID, user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 	if !caps.CanStats {
-		writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+		writeError(w, http.StatusForbidden, "forbidden", CodeForbidden)
 		return
 	}
 
@@ -146,13 +146,13 @@ func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 		} else if ts, id := decodeCursor(v); ts != "" && id != "" {
 			t, err := time.Parse(time.RFC3339Nano, ts)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid before cursor", "BAD_REQUEST")
+				writeError(w, http.StatusBadRequest, "invalid before cursor", CodeBadRequest)
 				return
 			}
 			before = t
 			beforeID = id
 		} else {
-			writeError(w, http.StatusBadRequest, "invalid before cursor, expected next_cursor value or RFC 3339 timestamp", "BAD_REQUEST")
+			writeError(w, http.StatusBadRequest, "invalid before cursor, expected next_cursor value or RFC 3339 timestamp", CodeBadRequest)
 			return
 		}
 	}
@@ -160,7 +160,7 @@ func (h *statsAPIHandler) ListClicks(w http.ResponseWriter, r *http.Request) {
 	// Fetch limit+1 to detect next page.
 	rows, err := h.clicks.ListRecentClicksBefore(r.Context(), link.ID, before, beforeID, limit+1)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 

@@ -22,7 +22,7 @@ type Tag struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
-// TagStore is the sqlx-backed implementation of TagStoreIface.
+// TagStore is the sqlx-backed tag data access layer.
 // Governing: SPEC-0002 REQ "Link Store Interface", ADR-0005
 type TagStore struct {
 	db *sqlx.DB

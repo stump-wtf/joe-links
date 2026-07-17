@@ -15,7 +15,7 @@ func registerKeywordRoutes(r chi.Router, keywords *store.KeywordStore) {
 	r.Get("/keywords", func(w http.ResponseWriter, r *http.Request) {
 		list, err := keywords.List(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list keywords", "INTERNAL_ERROR")
+			writeError(w, http.StatusInternalServerError, "failed to list keywords", CodeInternalError)
 			return
 		}
 		names := make([]string, len(list))
@@ -39,7 +39,7 @@ func registerKeywordTemplateRoutes(r chi.Router, keywords *store.KeywordStore) {
 	r.Get("/keywords/templates", func(w http.ResponseWriter, r *http.Request) {
 		list, err := keywords.List(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list keyword templates", "INTERNAL_ERROR")
+			writeError(w, http.StatusInternalServerError, "failed to list keyword templates", CodeInternalError)
 			return
 		}
 		resp := make([]KeywordTemplateResponse, len(list))

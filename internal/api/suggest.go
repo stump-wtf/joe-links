@@ -59,23 +59,23 @@ type suggestAPIHandler struct {
 func (h *suggestAPIHandler) Suggest(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
 	if h.suggester == nil {
-		writeError(w, http.StatusServiceUnavailable, "LLM suggestions are not configured", "LLM_NOT_CONFIGURED")
+		writeError(w, http.StatusServiceUnavailable, "LLM suggestions are not configured", CodeLLMNotConfigured)
 		return
 	}
 
 	var req SuggestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "invalid request body", CodeBadRequest)
 		return
 	}
 
 	if req.URL == "" {
-		writeError(w, http.StatusBadRequest, "url is required", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "url is required", CodeBadRequest)
 		return
 	}
 
@@ -97,7 +97,7 @@ func (h *suggestAPIHandler) Suggest(w http.ResponseWriter, r *http.Request) {
 		} else {
 			log.Printf("api: LLM suggest error: %v", err)
 		}
-		writeError(w, http.StatusBadGateway, "LLM provider error", "LLM_ERROR")
+		writeError(w, http.StatusBadGateway, "LLM provider error", CodeLLMError)
 		return
 	}
 

@@ -2,6 +2,8 @@
 package handler
 
 import (
+	"fmt"
+	"html/template"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -193,6 +195,18 @@ func (h *AdminHandler) UpdateLink(w http.ResponseWriter, r *http.Request) {
 	description := r.FormValue("description")
 	visibility := r.FormValue("visibility")
 
+	// Validate the URL exactly like the user-facing link forms do: reject empty
+	// URLs and duplicate $varname placeholders (issue #205).
+	// Governing: SPEC-0009 REQ "Variable Placeholder Syntax", ADR-0013
+	if url == "" {
+		h.renderEditRowError(w, r, id, url, title, description, "URL is required.")
+		return
+	}
+	if err := store.ValidateURLVariables(url); err != nil {
+		h.renderEditRowError(w, r, id, url, title, description, err.Error())
+		return
+	}
+
 	// Preserve existing visibility for admin inline edits
 	existing, err := h.links.GetByID(r.Context(), id)
 	if err != nil {
@@ -220,6 +234,27 @@ func (h *AdminHandler) UpdateLink(w http.ResponseWriter, r *http.Request) {
 	}
 	// Governing: SPEC-0014 REQ "Abstract Link Widget" — reuse shared link_row markup
 	renderFragment(w, "link_row", adminLinkRowData(r, link))
+}
+
+// renderEditRowError re-renders the inline edit row with the submitted values
+// so the admin can correct them, and surfaces msg via the shared toast area —
+// the same OOB toast channel the admin UI already uses for DeleteLink and
+// DeleteUser feedback.
+// Governing: SPEC-0011 REQ "Admin Inline Link Editing"
+func (h *AdminHandler) renderEditRowError(w http.ResponseWriter, r *http.Request, id, url, title, description, msg string) {
+	link, err := h.links.GetAdminLink(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	// Keep the admin's submitted values in the re-rendered form.
+	link.URL = url
+	link.Title = title
+	link.Description = description
+	renderPageFragment(w, "admin/links.html", "admin_link_edit_row", adminLinkRowData(r, link))
+	_, _ = fmt.Fprintf(w,
+		`<div id="toast-area" hx-swap-oob="innerHTML:#toast-area"><div class="alert alert-error"><span>%s</span></div></div>`,
+		template.HTMLEscapeString(msg))
 }
 
 // DeleteLink handles DELETE /admin/links/{id} — removes the link and returns an OOB toast.

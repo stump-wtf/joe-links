@@ -41,11 +41,11 @@ func requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := auth.UserFromContext(r.Context())
 		if user == nil {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+			writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 			return
 		}
 		if user.Role != "admin" {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+			writeError(w, http.StatusForbidden, "forbidden", CodeForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -77,7 +77,7 @@ func (h *adminAPIHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	// Fetch limit+1 to detect whether another page exists.
 	users, err := h.users.ListAllPaginated(r.Context(), limit+1, cursorName, cursorID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -127,22 +127,22 @@ func (h *adminAPIHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 
 	var req UpdateRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "invalid request body", CodeBadRequest)
 		return
 	}
 
 	if req.Role != "user" && req.Role != "admin" {
-		writeError(w, http.StatusBadRequest, "role must be \"user\" or \"admin\"", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "role must be \"user\" or \"admin\"", CodeBadRequest)
 		return
 	}
 
 	updated, err := h.users.UpdateRole(r.Context(), userID, req.Role)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "user not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "user not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -180,7 +180,7 @@ func (h *adminAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 	// Fetch limit+1 to detect whether another page exists.
 	links, err := h.links.ListAllPaginated(r.Context(), limit+1, cursorSlug, cursorID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -192,45 +192,17 @@ func (h *adminAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 		links = links[:limit]
 	}
 
+	// Governing: SPEC-0005 REQ "API Response Structures" — reuse buildLinkResponse
+	// so the admin list carries the same shape (owners, tags, visibility) as every
+	// other link endpoint; the previous hand-built response omitted visibility.
 	resp := &LinkListResponse{Links: make([]*LinkResponse, 0, len(links)), NextCursor: nextCursor}
 	for _, l := range links {
-		// Build owner list for each link.
-		owners, err := h.ownership.ListOwnerUsers(l.ID)
+		lr, err := buildLinkResponse(r.Context(), h.links, h.ownership, l)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
-		ownerResponses := make([]OwnerResponse, 0, len(owners))
-		for _, o := range owners {
-			ownerResponses = append(ownerResponses, OwnerResponse{
-				ID:        o.ID,
-				Email:     o.Email,
-				IsPrimary: o.IsPrimary,
-			})
-		}
-
-		// Build tag list for each link.
-		tags, err := h.links.ListTags(r.Context(), l.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
-		tagNames := make([]string, 0, len(tags))
-		for _, t := range tags {
-			tagNames = append(tagNames, t.Name)
-		}
-
-		resp.Links = append(resp.Links, &LinkResponse{
-			ID:          l.ID,
-			Slug:        l.Slug,
-			URL:         l.URL,
-			Title:       l.Title,
-			Description: l.Description,
-			Tags:        tagNames,
-			Owners:      ownerResponses,
-			CreatedAt:   l.CreatedAt,
-			UpdatedAt:   l.UpdatedAt,
-		})
+		resp.Links = append(resp.Links, lr)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

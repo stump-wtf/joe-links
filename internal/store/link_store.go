@@ -33,7 +33,8 @@ type ShareRecord struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
-// LinkStore is the sqlx-backed implementation of LinkStoreIface.
+// LinkStore is the sqlx-backed link data access layer. No handler may query
+// the DB directly; all link access goes through this store.
 // Governing: SPEC-0002 REQ "Link Store Interface"
 type LinkStore struct {
 	db   *sqlx.DB
@@ -306,11 +307,13 @@ func (s *LinkStore) SearchByOwner(ctx context.Context, ownerID, q string) ([]*Li
 	}
 	var links []*Link
 	pattern := "%" + q + "%"
+	// LOWER(col) LIKE LOWER(?) so matching is case-insensitive on PostgreSQL
+	// too (plain LIKE is case-sensitive there; SQLite/MySQL already fold ASCII).
 	err := s.db.SelectContext(ctx, &links, s.q(`
 		SELECT l.* FROM links l
 		INNER JOIN link_owners lo ON lo.link_id = l.id
 		WHERE lo.user_id = ?
-		  AND (l.slug LIKE ? OR l.url LIKE ? OR l.description LIKE ?)
+		  AND (LOWER(l.slug) LIKE LOWER(?) OR LOWER(l.url) LIKE LOWER(?) OR LOWER(l.description) LIKE LOWER(?))
 		ORDER BY l.slug ASC
 	`), ownerID, pattern, pattern, pattern)
 	if err != nil {
@@ -328,9 +331,10 @@ func (s *LinkStore) SearchAll(ctx context.Context, q string) ([]*Link, error) {
 	}
 	var links []*Link
 	pattern := "%" + q + "%"
+	// LOWER(col) LIKE LOWER(?) — see SearchByOwner for the PostgreSQL rationale.
 	err := s.db.SelectContext(ctx, &links, s.q(`
 		SELECT * FROM links
-		WHERE slug LIKE ? OR url LIKE ? OR description LIKE ?
+		WHERE LOWER(slug) LIKE LOWER(?) OR LOWER(url) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?)
 		ORDER BY slug ASC
 	`), pattern, pattern, pattern)
 	if err != nil {
@@ -534,7 +538,19 @@ func (s *LinkStore) ListAllAdmin(ctx context.Context, q string) ([]*AdminLink, e
 	var args []interface{}
 	if q != "" {
 		pattern := "%" + q + "%"
-		query += ` WHERE l.slug LIKE ? OR l.url LIKE ? OR l.title LIKE ? OR u.display_name LIKE ?`
+		// The owner-name filter is an EXISTS subquery, not a WHERE on the joined
+		// u.display_name: filtering the joined rows would drop every non-matching
+		// owner/tag row before GROUP_CONCAT/STRING_AGG runs, truncating the
+		// aggregated owners and tags columns to the matching subset (issue #205).
+		// LOWER(col) LIKE LOWER(?) keeps matching case-insensitive on PostgreSQL,
+		// where plain LIKE is case-sensitive (SQLite/MySQL already match ASCII
+		// case-insensitively, so this is a no-op there).
+		query += ` WHERE LOWER(l.slug) LIKE LOWER(?) OR LOWER(l.url) LIKE LOWER(?) OR LOWER(l.title) LIKE LOWER(?)
+			OR EXISTS (
+				SELECT 1 FROM link_owners lo2
+				INNER JOIN users u2 ON u2.id = lo2.user_id
+				WHERE lo2.link_id = l.id AND LOWER(u2.display_name) LIKE LOWER(?)
+			)`
 		args = append(args, pattern, pattern, pattern, pattern)
 	}
 	query += ` GROUP BY l.id ORDER BY l.slug ASC`
@@ -623,7 +639,8 @@ func (s *LinkStore) ListPublic(ctx context.Context, currentUserID, q string, pag
 	var args []interface{}
 	if q != "" {
 		pattern := "%" + q + "%"
-		baseWhere += ` AND (l.slug LIKE ? OR l.url LIKE ? OR l.title LIKE ? OR l.description LIKE ?)`
+		// LOWER(col) LIKE LOWER(?) — see SearchByOwner for the PostgreSQL rationale.
+		baseWhere += ` AND (LOWER(l.slug) LIKE LOWER(?) OR LOWER(l.url) LIKE LOWER(?) OR LOWER(l.title) LIKE LOWER(?) OR LOWER(l.description) LIKE LOWER(?))`
 		args = append(args, pattern, pattern, pattern, pattern)
 	}
 

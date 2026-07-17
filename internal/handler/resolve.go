@@ -240,10 +240,11 @@ func (h *ResolveHandler) redirect(w http.ResponseWriter, r *http.Request, linkID
 		if u := auth.UserFromContext(r.Context()); u != nil {
 			userID = u.ID
 		}
+		// User-agent and referrer length limits are enforced rune-safely in
+		// ClickStore.RecordClick (512 / 2048 runes). Byte-slicing here first
+		// could split a multi-byte character at the cut point and hand invalid
+		// UTF-8 downstream, so the store's truncation is the only cap (issue #205).
 		ua := r.UserAgent()
-		if len(ua) > 512 {
-			ua = ua[:512]
-		}
 		// Governing: SPEC-0016 REQ "Click Data Schema" — strip query/fragment to prevent token leakage
 		ref := r.Referer()
 		if ref != "" {
@@ -252,9 +253,6 @@ func (h *ResolveHandler) redirect(w http.ResponseWriter, r *http.Request, linkID
 				u.Fragment = ""
 				ref = u.String()
 			}
-		}
-		if len(ref) > 2048 {
-			ref = ref[:2048]
 		}
 		select {
 		case h.clickCh <- store.ClickEvent{

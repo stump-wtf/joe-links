@@ -48,7 +48,7 @@ func registerShareRoutes(r chi.Router, links *store.LinkStore, ownership *store.
 func (h *sharesAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -56,28 +56,28 @@ func (h *sharesAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
 	if user.Role != "admin" {
 		isOwner, err := h.ownership.IsOwner(link.ID, user.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
 		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+			writeError(w, http.StatusForbidden, "forbidden", CodeForbidden)
 			return
 		}
 	}
 
 	shares, err := h.links.ListShares(r.Context(), link.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -85,7 +85,7 @@ func (h *sharesAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 	for _, s := range shares {
 		u, err := h.users.GetByID(r.Context(), s.UserID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
 		resp = append(resp, ShareResponse{
@@ -124,7 +124,7 @@ func (h *sharesAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *sharesAPIHandler) Add(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -132,65 +132,65 @@ func (h *sharesAPIHandler) Add(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
 	if user.Role != "admin" {
 		isOwner, err := h.ownership.IsOwner(link.ID, user.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
 		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+			writeError(w, http.StatusForbidden, "forbidden", CodeForbidden)
 			return
 		}
 	}
 
 	var req AddShareRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "invalid request body", CodeBadRequest)
 		return
 	}
 	if req.Email == "" {
-		writeError(w, http.StatusBadRequest, "email is required", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "email is required", CodeBadRequest)
 		return
 	}
 
 	targetUser, err := h.users.GetByEmail(r.Context(), req.Email)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "user not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "user not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
 	// Check if already shared.
 	hasShare, err := h.links.HasShare(r.Context(), link.ID, targetUser.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 	if hasShare {
-		writeError(w, http.StatusConflict, "link is already shared with this user", "DUPLICATE_SHARE")
+		writeError(w, http.StatusConflict, "link is already shared with this user", CodeDuplicateShare)
 		return
 	}
 
 	if err := h.links.AddShare(r.Context(), link.ID, targetUser.ID, user.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
 	// Fetch the created share record for the response.
 	shares, err := h.links.ListShares(r.Context(), link.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -208,7 +208,7 @@ func (h *sharesAPIHandler) Add(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+	writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 }
 
 // Remove revokes a user's share access to a link.
@@ -232,7 +232,7 @@ func (h *sharesAPIHandler) Add(w http.ResponseWriter, r *http.Request) {
 func (h *sharesAPIHandler) Remove(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -240,21 +240,21 @@ func (h *sharesAPIHandler) Remove(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
 	if user.Role != "admin" {
 		isOwner, err := h.ownership.IsOwner(link.ID, user.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
 		if !isOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+			writeError(w, http.StatusForbidden, "forbidden", CodeForbidden)
 			return
 		}
 	}
@@ -264,16 +264,16 @@ func (h *sharesAPIHandler) Remove(w http.ResponseWriter, r *http.Request) {
 	// Verify the share exists before deleting.
 	hasShare, err := h.links.HasShare(r.Context(), link.ID, shareUID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 	if !hasShare {
-		writeError(w, http.StatusNotFound, "share not found", "NOT_FOUND")
+		writeError(w, http.StatusNotFound, "share not found", CodeNotFound)
 		return
 	}
 
 	if err := h.links.RemoveShare(r.Context(), link.ID, shareUID); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 

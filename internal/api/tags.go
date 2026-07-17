@@ -45,7 +45,7 @@ func registerTagRoutes(r chi.Router, tags *store.TagStore, links *store.LinkStor
 func (h *tagsAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -65,7 +65,7 @@ func (h *tagsAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 		tagsWithCounts, err = h.tags.ListWithCountsVisiblePaginated(r.Context(), user.ID, limit+1, cursorName, cursorID)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "internal_error")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -108,7 +108,7 @@ func (h *tagsAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *tagsAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -121,11 +121,11 @@ func (h *tagsAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 		// Verify the tag exists.
 		_, err = h.tags.GetBySlug(r.Context(), tagSlug)
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "tag not found", "not_found")
+			writeError(w, http.StatusNotFound, "tag not found", CodeNotFound)
 			return
 		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "internal_error")
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
 		links, err = h.links.ListByTag(r.Context(), tagSlug)
@@ -135,7 +135,7 @@ func (h *tagsAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 		links, err = h.links.ListVisibleByTag(r.Context(), tagSlug, user.ID)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "internal_error")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 	// A tag whose links are all invisible to the caller must be
@@ -144,7 +144,7 @@ func (h *tagsAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 	// tag-existence oracle). Mirrors the dashboard Detail behavior from PR #241.
 	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
 	if !user.IsAdmin() && len(links) == 0 {
-		writeError(w, http.StatusNotFound, "tag not found", "not_found")
+		writeError(w, http.StatusNotFound, "tag not found", CodeNotFound)
 		return
 	}
 
@@ -153,7 +153,7 @@ func (h *tagsAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 	for _, l := range links {
 		lr, err := buildLinkResponse(r.Context(), h.links, h.ownership, l)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "internal_error")
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
 		resp.Links = append(resp.Links, lr)

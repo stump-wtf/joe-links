@@ -42,13 +42,13 @@ func registerTokenRoutes(r chi.Router, tokens auth.TokenStore) {
 func (h *tokensAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
 	records, err := h.tokens.ListByUser(r.Context(), user.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "internal_error")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -92,29 +92,29 @@ func (h *tokensAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *tokensAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
 	var req CreateTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body", "bad_request")
+		writeError(w, http.StatusBadRequest, "invalid request body", CodeBadRequest)
 		return
 	}
 	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required", "bad_request")
+		writeError(w, http.StatusBadRequest, "name is required", CodeBadRequest)
 		return
 	}
 
 	plaintext, hash, err := auth.GenerateToken()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "token generation failed", "internal_error")
+		writeError(w, http.StatusInternalServerError, "token generation failed", CodeInternalError)
 		return
 	}
 
 	rec, err := h.tokens.Create(r.Context(), user.ID, req.Name, hash, req.ExpiresAt)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "token creation failed", "internal_error")
+		writeError(w, http.StatusInternalServerError, "token creation failed", CodeInternalError)
 		return
 	}
 
@@ -153,18 +153,18 @@ func (h *tokensAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *tokensAPIHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
 	tokenID := chi.URLParam(r, "id")
 	err := h.tokens.Revoke(r.Context(), tokenID, user.ID)
 	if err == store.ErrNotFound {
-		writeError(w, http.StatusNotFound, "not found", "not_found")
+		writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "revoke failed", "internal_error")
+		writeError(w, http.StatusInternalServerError, "revoke failed", CodeInternalError)
 		return
 	}
 

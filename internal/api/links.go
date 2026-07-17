@@ -45,11 +45,11 @@ func registerLinkRoutes(r chi.Router, links *store.LinkStore, ownership *store.O
 func requireOwnerOrAdmin(w http.ResponseWriter, ownership *store.OwnershipStore, user *store.User, linkID string) bool {
 	allowed, err := store.IsOwnerOrAdmin(ownership, linkID, user.ID, user.Role)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return false
 	}
 	if !allowed {
-		writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+		writeError(w, http.StatusForbidden, "forbidden", CodeForbidden)
 		return false
 	}
 	return true
@@ -74,7 +74,7 @@ func requireOwnerOrAdmin(w http.ResponseWriter, ownership *store.OwnershipStore,
 func (h *linksAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -88,14 +88,14 @@ func (h *linksAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 	if urlFilter := r.URL.Query().Get("url"); urlFilter != "" {
 		links, err := h.links.ListByURL(r.Context(), urlFilter, user.ID, user.Role == "admin")
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
 		resp := &LinkListResponse{Links: make([]*LinkResponse, 0, len(links))}
 		for _, l := range links {
 			lr, err := h.toLinkResponse(r.Context(), l)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+				writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 				return
 			}
 			resp.Links = append(resp.Links, lr)
@@ -113,7 +113,7 @@ func (h *linksAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 		links, err = h.links.ListByOwnerOrSharedPaginated(r.Context(), user.ID, limit+1, cursorSlug, cursorID)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -129,7 +129,7 @@ func (h *linksAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 	for _, l := range links {
 		lr, err := h.toLinkResponse(r.Context(), l)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
 		resp.Links = append(resp.Links, lr)
@@ -158,22 +158,22 @@ func (h *linksAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
 	var req CreateLinkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "invalid request body", CodeBadRequest)
 		return
 	}
 
 	if req.Slug == "" {
-		writeError(w, http.StatusBadRequest, "slug is required", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "slug is required", CodeBadRequest)
 		return
 	}
 	if req.URL == "" {
-		writeError(w, http.StatusBadRequest, "url is required", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "url is required", CodeBadRequest)
 		return
 	}
 
@@ -181,22 +181,22 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// Governing: SPEC-0005 REQ "Links Collection" — slug format [a-z0-9][a-z0-9\-]*[a-z0-9]
 	if err := store.ValidateSlugFormat(req.Slug); err != nil {
 		if errors.Is(err, store.ErrSlugReserved) {
-			writeError(w, http.StatusBadRequest, err.Error(), "INVALID_SLUG")
+			writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidSlug)
 			return
 		}
-		writeError(w, http.StatusBadRequest, "slug must match [a-z0-9][a-z0-9-]*[a-z0-9]", "INVALID_SLUG")
+		writeError(w, http.StatusBadRequest, "slug must match [a-z0-9][a-z0-9-]*[a-z0-9]", CodeInvalidSlug)
 		return
 	}
 
 	// Governing: SPEC-0009 REQ "Variable Placeholder Syntax", ADR-0013
 	if err := store.ValidateURLVariables(req.URL); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error(), "INVALID_URL")
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidURL)
 		return
 	}
 
 	// Governing: SPEC-0002 REQ "Links Table" — title max 200, description max 2000 characters
 	if err := store.ValidateLinkText(req.Title, req.Description); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error(), "INVALID_FIELD_LENGTH")
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidFieldLength)
 		return
 	}
 
@@ -206,7 +206,7 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 		visibility = "public"
 	}
 	if err := store.ValidateVisibility(visibility); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error(), "INVALID_VISIBILITY")
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidVisibility)
 		return
 	}
 
@@ -217,21 +217,21 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.CreateFull(r.Context(), req.Slug, req.URL, user.ID, req.Title, req.Description, visibility, req.Tags, nil, "")
 	if err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {
-			writeError(w, http.StatusConflict, "slug already exists", "SLUG_CONFLICT")
+			writeError(w, http.StatusConflict, "slug already exists", CodeSlugConflict)
 			return
 		}
 		log.Printf("api: create link %q: %v", req.Slug, err)
 		if isDBLockError(err) {
-			writeError(w, http.StatusServiceUnavailable, "server is busy, please retry", "DB_BUSY")
+			writeError(w, http.StatusServiceUnavailable, "server is busy, please retry", CodeDBBusy)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
 	lr, err := h.toLinkResponse(r.Context(), link)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -259,7 +259,7 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *linksAPIHandler) Get(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -267,27 +267,27 @@ func (h *linksAPIHandler) Get(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
 	// Governing: SPEC-0010 REQ "REST API Visibility Field" — owners, shared users, and admins may access
 	caps, err := store.LinkCapsFor(r.Context(), h.ownership, h.links, link.ID, user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 	if !caps.CanView {
-		writeError(w, http.StatusForbidden, "forbidden", "FORBIDDEN")
+		writeError(w, http.StatusForbidden, "forbidden", CodeForbidden)
 		return
 	}
 
 	lr, err := h.toLinkResponse(r.Context(), link)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -316,7 +316,7 @@ func (h *linksAPIHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -324,10 +324,10 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -337,24 +337,24 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	var req UpdateLinkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "invalid request body", CodeBadRequest)
 		return
 	}
 
 	if req.URL == "" {
-		writeError(w, http.StatusBadRequest, "url is required", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "url is required", CodeBadRequest)
 		return
 	}
 
 	// Governing: SPEC-0009 REQ "Variable Placeholder Syntax", ADR-0013
 	if err := store.ValidateURLVariables(req.URL); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error(), "INVALID_URL")
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidURL)
 		return
 	}
 
 	// Governing: SPEC-0002 REQ "Links Table" — title max 200, description max 2000 characters
 	if err := store.ValidateLinkText(req.Title, req.Description); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error(), "INVALID_FIELD_LENGTH")
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidFieldLength)
 		return
 	}
 
@@ -362,7 +362,7 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 	visibility := link.Visibility
 	if req.Visibility != "" {
 		if err := store.ValidateVisibility(req.Visibility); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error(), "INVALID_VISIBILITY")
+			writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidVisibility)
 			return
 		}
 		visibility = req.Visibility
@@ -370,7 +370,7 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.links.Update(r.Context(), link.ID, req.URL, req.Title, req.Description, visibility)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -380,16 +380,16 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err := h.links.SetTags(r.Context(), link.ID, req.Tags); err != nil {
 		log.Printf("api: set tags for link %s: %v", link.ID, err)
 		if isDBLockError(err) {
-			writeError(w, http.StatusServiceUnavailable, "server is busy, please retry", "DB_BUSY")
+			writeError(w, http.StatusServiceUnavailable, "server is busy, please retry", CodeDBBusy)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "link updated but tags could not be saved; retry the request", "TAG_WRITE_FAILED")
+		writeError(w, http.StatusInternalServerError, "link updated but tags could not be saved; retry the request", CodeTagWriteFailed)
 		return
 	}
 
 	lr, err := h.toLinkResponse(r.Context(), updated)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -416,7 +416,7 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *linksAPIHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -424,10 +424,10 @@ func (h *linksAPIHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -436,7 +436,7 @@ func (h *linksAPIHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.links.Delete(r.Context(), link.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -463,7 +463,7 @@ func (h *linksAPIHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *linksAPIHandler) ListOwners(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -471,10 +471,10 @@ func (h *linksAPIHandler) ListOwners(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -484,7 +484,7 @@ func (h *linksAPIHandler) ListOwners(w http.ResponseWriter, r *http.Request) {
 
 	owners, err := h.ownership.ListOwnerUsers(link.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -523,7 +523,7 @@ func (h *linksAPIHandler) ListOwners(w http.ResponseWriter, r *http.Request) {
 func (h *linksAPIHandler) AddOwner(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -531,10 +531,10 @@ func (h *linksAPIHandler) AddOwner(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -544,30 +544,30 @@ func (h *linksAPIHandler) AddOwner(w http.ResponseWriter, r *http.Request) {
 
 	var req AddOwnerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "invalid request body", CodeBadRequest)
 		return
 	}
 	if req.Email == "" {
-		writeError(w, http.StatusBadRequest, "email is required", "BAD_REQUEST")
+		writeError(w, http.StatusBadRequest, "email is required", CodeBadRequest)
 		return
 	}
 
 	targetUser, err := h.users.GetByEmail(r.Context(), req.Email)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "user not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "user not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
 	if err := h.links.AddOwner(r.Context(), link.ID, targetUser.ID); err != nil {
 		if errors.Is(err, store.ErrDuplicateOwner) {
-			writeError(w, http.StatusConflict, "user is already an owner", "DUPLICATE_OWNER")
+			writeError(w, http.StatusConflict, "user is already an owner", CodeDuplicateOwner)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -600,7 +600,7 @@ func (h *linksAPIHandler) AddOwner(w http.ResponseWriter, r *http.Request) {
 func (h *linksAPIHandler) RemoveOwner(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "UNAUTHORIZED")
+		writeError(w, http.StatusUnauthorized, "unauthorized", CodeUnauthorized)
 		return
 	}
 
@@ -608,10 +608,10 @@ func (h *linksAPIHandler) RemoveOwner(w http.ResponseWriter, r *http.Request) {
 	link, err := h.links.GetByID(r.Context(), linkID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 
@@ -622,14 +622,14 @@ func (h *linksAPIHandler) RemoveOwner(w http.ResponseWriter, r *http.Request) {
 	ownerUID := chi.URLParam(r, "uid")
 	if err := h.links.RemoveOwner(r.Context(), link.ID, ownerUID); err != nil {
 		if errors.Is(err, store.ErrPrimaryOwnerImmutable) {
-			writeError(w, http.StatusBadRequest, "primary owner cannot be removed", "PRIMARY_OWNER_PROTECTED")
+			writeError(w, http.StatusBadRequest, "primary owner cannot be removed", CodePrimaryOwnerProtected)
 			return
 		}
 		if errors.Is(err, store.ErrNotOwner) {
-			writeError(w, http.StatusNotFound, "owner not found", "NOT_FOUND")
+			writeError(w, http.StatusNotFound, "owner not found", CodeNotFound)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
 

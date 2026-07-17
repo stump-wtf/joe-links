@@ -174,3 +174,39 @@ func TestAdmin_Unauthenticated(t *testing.T) {
 		})
 	}
 }
+
+// Governing: SPEC-0010 REQ "REST API Visibility Field" — the admin list must
+// carry visibility like every other link endpoint (issue #205: the hand-built
+// admin response omitted it, returning "visibility": "").
+func TestAdmin_ListLinks_IncludesVisibility(t *testing.T) {
+	env := newTestEnv(t)
+	admin := seedUser(t, env, "admin@example.com", "admin")
+	token := seedToken(t, env, admin.ID)
+
+	if _, err := env.LinkStore.Create(t.Context(), "vis-link", "https://example.com", admin.ID, "T", "D", "secure"); err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/admin/links", nil)
+	authRequest(req, token)
+	rec := httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp api.LinkListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Links) != 1 {
+		t.Fatalf("len(links) = %d, want 1", len(resp.Links))
+	}
+	if got := resp.Links[0].Visibility; got != "secure" {
+		t.Errorf("visibility = %q, want %q", got, "secure")
+	}
+	if len(resp.Links[0].Owners) != 1 {
+		t.Errorf("len(owners) = %d, want 1", len(resp.Links[0].Owners))
+	}
+}

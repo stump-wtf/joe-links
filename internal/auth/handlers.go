@@ -214,13 +214,15 @@ func (h *Handlers) applyRoleGrant(ctx context.Context, user *store.User, compute
 	return promoted, nil
 }
 
-// Logout destroys the session and redirects to the login page.
+// Logout destroys the session and redirects to the landing page. Redirecting
+// to /auth/login instead would immediately restart the OIDC flow — with a live
+// IdP session the user is silently signed back in, making logout a no-op.
 func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	if err := h.sessions.Destroy(r.Context()); err != nil {
 		http.Error(w, "logout error", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/auth/login", http.StatusFound)
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (h *Handlers) setPreAuthCookie(w http.ResponseWriter, name, value string) {
