@@ -11,24 +11,57 @@ import vm from 'node:vm';
 
 const src = readFileSync(new URL('./popup.js', import.meta.url), 'utf8');
 
-function loadPopup() {
-  const noopElement = { addEventListener: () => {}, style: {}, value: '' };
+// Load popup.js into a fresh sandbox. `storage` seeds chrome.storage.local;
+// `tabs` seeds chrome.tabs.query. Captures document listeners (so tests can
+// fire DOMContentLoaded) and elements by id (so tests can assert DOM writes).
+function loadPopup({ storage = {}, tabs = [] } = {}) {
+  const elements = new Map();
+  function el(id) {
+    if (!elements.has(id)) {
+      elements.set(id, {
+        addEventListener: () => {},
+        style: {},
+        classList: { add: () => {}, remove: () => {} },
+        value: '',
+        textContent: '',
+        disabled: false,
+        hidden: false,
+        open: false,
+        focus: () => {},
+        appendChild: () => {},
+        replaceChildren: () => {},
+        remove: () => {},
+      });
+    }
+    return elements.get(id);
+  }
+  const listeners = {};
   const context = vm.createContext({
     document: {
-      addEventListener: () => {},
-      getElementById: () => noopElement,
+      addEventListener: (name, fn) => { listeners[name] = fn; },
+      getElementById: (id) => el(id),
       querySelectorAll: () => [],
-      createElement: () => noopElement,
+      createElement: () => el(`created-${elements.size}`),
     },
-    chrome: {},
+    chrome: {
+      storage: { local: { get: async (defaults) => ({ ...defaults, ...storage }) } },
+      tabs: { query: async () => tabs, create: () => {} },
+      runtime: { openOptionsPage: () => {} },
+      scripting: { executeScript: async () => [] },
+    },
     URL,
+    AbortSignal,
+    fetch: async () => { throw new Error('network disabled in tests'); },
+    navigator: { clipboard: { writeText: async () => {} } },
+    DOMParser: class { parseFromString() { return { documentElement: el('svg') }; } },
+    setTimeout,
     console,
   });
   vm.runInContext(src, context, { filename: 'popup.js' });
-  return context;
+  return { context, listeners, el };
 }
 
-const match = (tabURL, tpl) => loadPopup().matchKeywordTemplate(tabURL, tpl);
+const match = (tabURL, tpl) => loadPopup().context.matchKeywordTemplate(tabURL, tpl);
 
 // Templates are validated server-side to contain {slug} (internal/handler/keywords.go),
 // so matching must split on {slug} — the old code split on '$' and never matched.
@@ -86,4 +119,33 @@ test('returns null when the slug remainder is empty', () => {
     match('https://jira.example.com/browse/', 'https://jira.example.com/browse/{slug}'),
     null,
   );
+});
+
+// --- #210: slug prefix honors the server-configured short keyword -----------
+// Governing: SPEC-0008 REQ "Keyword Host Discovery"
+
+test('slug prefix uses the stored short keyword from GET /api/v1/config', async () => {
+  const { listeners, el } = loadPopup({
+    storage: { baseURL: 'https://links.example.com', shortKeyword: 'go' },
+  });
+  await listeners.DOMContentLoaded();
+  assert.equal(el('slug-prefix').textContent, 'go/');
+});
+
+test('slug prefix falls back to the hostname first label on older servers', async () => {
+  const { listeners, el } = loadPopup({
+    storage: { baseURL: 'https://links.example.com' },
+  });
+  await listeners.DOMContentLoaded();
+  assert.equal(el('slug-prefix').textContent, 'links/');
+});
+
+test('slug prefix lowercases an uppercase configured short keyword', async () => {
+  // Interception only ever matches lowercase, so the advertised prefix must
+  // match what actually works — mirrors resolveServerKeyword in background.js.
+  const { listeners, el } = loadPopup({
+    storage: { baseURL: 'https://links.example.com', shortKeyword: 'Go' },
+  });
+  await listeners.DOMContentLoaded();
+  assert.equal(el('slug-prefix').textContent, 'go/');
 });

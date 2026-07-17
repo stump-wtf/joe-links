@@ -211,6 +211,26 @@ const docTemplate = `{
                 }
             }
         },
+        "/config": {
+            "get": {
+                "description": "Returns extension-facing configuration such as the short-link prefix (JOE_SHORT_KEYWORD override, else the first DNS label of the server hostname). No authentication required.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "Public server configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ConfigResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/links": {
             "get": {
                 "security": [
@@ -1309,6 +1329,16 @@ const docTemplate = `{
             "properties": {
                 "email": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api.ConfigResponse": {
+            "type": "object",
+            "properties": {
+                "short_keyword": {
+                    "description": "ShortKeyword is the short-link prefix the deployment advertises in its\nUI (e.g. \"go\"). Either the JOE_SHORT_KEYWORD override or, when unset,\nthe first DNS label of the request host.",
+                    "type": "string",
+                    "example": "go"
                 }
             }
         },

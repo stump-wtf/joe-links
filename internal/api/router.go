@@ -21,6 +21,7 @@ type Deps struct {
 	KeywordStore     *store.KeywordStore
 	ClickStore       *store.ClickStore
 	Suggester        llm.Suggester // nil when LLM is not configured
+	ShortKeyword     string        // optional override (JOE_SHORT_KEYWORD); "" = derive from request Host
 }
 
 // NewAPIRouter creates and returns a chi router for /api/v1.
@@ -37,6 +38,7 @@ func NewAPIRouter(deps Deps) http.Handler {
 	// Governing: SPEC-0008 REQ "Keyword Host Discovery", ADR-0011
 	r.Group(func(r chi.Router) {
 		registerKeywordRoutes(r, deps.KeywordStore)
+		registerConfigRoutes(r, deps.ShortKeyword)
 	})
 
 	// Authenticated routes — bearer token required.

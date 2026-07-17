@@ -10,6 +10,16 @@ definitions:
       email:
         type: string
     type: object
+  internal_api.ConfigResponse:
+    properties:
+      short_keyword:
+        description: |-
+          ShortKeyword is the short-link prefix the deployment advertises in its
+          UI (e.g. "go"). Either the JOE_SHORT_KEYWORD override or, when unset,
+          the first DNS label of the request host.
+        example: go
+        type: string
+    type: object
   internal_api.CreateLinkRequest:
     properties:
       description:
@@ -351,6 +361,21 @@ paths:
       summary: Update user role (admin)
       tags:
       - Admin
+  /config:
+    get:
+      description: Returns extension-facing configuration such as the short-link prefix
+        (JOE_SHORT_KEYWORD override, else the first DNS label of the server hostname).
+        No authentication required.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.ConfigResponse'
+      summary: Public server configuration
+      tags:
+      - Config
   /links:
     get:
       consumes:

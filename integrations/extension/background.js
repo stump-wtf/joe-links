@@ -27,7 +27,20 @@ function getSearchQuery(url) {
 // Governing: SPEC-0008 REQ "Search Interception and Redirect", REQ "Fallthrough Safety"
 const KEYWORD_RE = /^([A-Za-z][A-Za-z0-9-]*)\/(\S+)$/;
 
-const DEFAULTS = { baseURL: 'http://go', keywords: ['go'] };
+const DEFAULTS = { baseURL: 'http://go', keywords: ['go'], shortKeyword: '' };
+
+// Resolve the server's short-link prefix: prefer the value discovered from
+// GET /api/v1/config (JOE_SHORT_KEYWORD deployments where the prefix differs
+// from the hostname's first label, e.g. "go/" on links.example.com), else
+// derive it from the server hostname's first label. Lowercased: typed keywords
+// are lowercased before comparison and URL hostnames are inherently lowercase,
+// so an uppercase JOE_SHORT_KEYWORD (e.g. "Go") could never match verbatim.
+// Governing: SPEC-0008 REQ "Keyword Host Discovery"
+function resolveServerKeyword(serverHost, storedShortKeyword) {
+  return (typeof storedShortKeyword === 'string' && storedShortKeyword)
+    ? storedShortKeyword.toLowerCase()
+    : serverHost.split('.')[0];
+}
 
 // Draw a clean chain-link icon programmatically at a given size.
 // Avoids the diagonal-stroke "X" appearance of the PNG at 16px.
@@ -100,9 +113,10 @@ async function setActionIcon() {
 // Requires Chrome 90+ or Firefox 127+; older versions degrade gracefully.
 async function updateRedirectRules() {
   try {
-    const { baseURL, keywords } = await chrome.storage.local.get({
+    const { baseURL, keywords, shortKeyword } = await chrome.storage.local.get({
       baseURL: DEFAULTS.baseURL,
       keywords: DEFAULTS.keywords,
+      shortKeyword: DEFAULTS.shortKeyword,
     });
     let serverURL;
     try { serverURL = new URL(baseURL); } catch { return; }
@@ -110,9 +124,10 @@ async function updateRedirectRules() {
     const scheme = serverURL.protocol.slice(0, -1); // strip trailing ':'
     const kws = Array.isArray(keywords) ? keywords : DEFAULTS.keywords;
 
-    // Always include the short alias (e.g. 'go' from 'go.stump.rocks') so a
-    // declarativeNetRequest rule is created even when storage keywords are stale.
-    const serverKeyword = serverHost.split('.')[0];
+    // Always include the short alias (the server-configured short keyword, else
+    // e.g. 'go' from 'go.stump.rocks') so a declarativeNetRequest rule is
+    // created even when storage keywords are stale.
+    const serverKeyword = resolveServerKeyword(serverHost, shortKeyword);
     const allKeywords = [...new Set([...kws, serverKeyword])].filter(k => k !== serverHost);
 
     // One rule per keyword that differs from the server hostname.
@@ -148,11 +163,38 @@ async function updateRedirectRules() {
   }
 }
 
+// Fetch the server-configured short keyword from GET /api/v1/config.
+// Returns '' only when the endpoint is definitively absent (404 — a pre-#210
+// server), so callers fall back to deriving the prefix from the hostname's
+// first label. Transient failures (5xx, timeout, network error) return null so
+// callers keep a previously discovered value — one blip during the hourly
+// refresh must not drop a working alias until the next successful refresh.
+// Never throws: a /config failure must NOT fail the keyword refresh.
+// Governing: SPEC-0008 REQ "Keyword Host Discovery"
+async function fetchShortKeyword(baseURL, headers) {
+  try {
+    const res = await fetch(`${baseURL}/api/v1/config`, {
+      signal: AbortSignal.timeout(5000),
+      headers,
+    });
+    if (res.status === 404) return ''; // endpoint absent — older server
+    if (!res.ok) return null;          // transient server error — keep stored value
+    const data = await res.json();
+    return (data && typeof data.short_keyword === 'string') ? data.short_keyword : '';
+  } catch {
+    return null; // network error / timeout — keep stored value
+  }
+}
+
 // Governing: SPEC-0008 REQ "Keyword Host Discovery", REQ "API Key Authentication"
 // Returns { ok: true } on success or { ok: false, error } so callers (the options
 // page's "Refresh now" and save flows) can surface failures instead of a false success.
 async function refreshKeywords() {
-  const { baseURL, apiKey } = await chrome.storage.local.get({ baseURL: DEFAULTS.baseURL, apiKey: '' });
+  const { baseURL, apiKey, shortKeyword: storedShortKeyword } = await chrome.storage.local.get({
+    baseURL: DEFAULTS.baseURL,
+    apiKey: '',
+    shortKeyword: DEFAULTS.shortKeyword,
+  });
   const headers = {};
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
   try {
@@ -163,13 +205,20 @@ async function refreshKeywords() {
     if (!res.ok) return { ok: false, error: `Server returned ${res.status}.` };
     const data = await res.json();
     if (!Array.isArray(data)) return { ok: false, error: 'Unexpected response from server.' };
-    // Always include the canonical hostname and its short first-label alias
-    // (e.g. 'go.stump.rocks' and 'go') so declarativeNetRequest rules are
-    // created even when no keyword templates are configured on the server.
+    // Discover the configured short prefix (JOE_SHORT_KEYWORD). Stored as ''
+    // when definitively absent (404 — older server) so the hostname fallback
+    // stays dynamic if baseURL changes; on a transient /config failure (null)
+    // keep the previously stored value instead of wiping a working alias.
+    const fetched = await fetchShortKeyword(baseURL, headers);
+    const shortKeyword = fetched === null ? storedShortKeyword : fetched;
+    // Always include the canonical hostname and its short alias (the configured
+    // short keyword, else the first hostname label — e.g. 'go.stump.rocks' and
+    // 'go') so declarativeNetRequest rules are created even when no keyword
+    // templates are configured on the server.
     const canonical = new URL(baseURL).hostname;
-    const serverKeyword = canonical.split('.')[0];
+    const serverKeyword = resolveServerKeyword(canonical, shortKeyword);
     const merged = [...new Set([canonical, serverKeyword, ...data])];
-    await chrome.storage.local.set({ keywords: merged });
+    await chrome.storage.local.set({ keywords: merged, shortKeyword });
     return { ok: true };
   } catch {
     // Server unreachable — keep existing keyword list.
@@ -252,14 +301,16 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   try { url = new URL(details.url); } catch { return; }
 
   // Combine storage reads into a single call for efficiency.
-  const { baseURL, keywords } = await chrome.storage.local.get({
+  const { baseURL, keywords, shortKeyword } = await chrome.storage.local.get({
     baseURL: DEFAULTS.baseURL,
     keywords: DEFAULTS.keywords,
+    shortKeyword: DEFAULTS.shortKeyword,
   });
   const kws = Array.isArray(keywords) ? keywords : DEFAULTS.keywords;
   const serverHost = new URL(baseURL).hostname;
-  // Short alias from the first hostname label (e.g. 'go' from 'go.stump.rocks').
-  const serverKeyword = serverHost.split('.')[0];
+  // Short alias: the server-configured short keyword (JOE_SHORT_KEYWORD), else
+  // the first hostname label (e.g. 'go' from 'go.stump.rocks').
+  const serverKeyword = resolveServerKeyword(serverHost, shortKeyword);
 
   // Build the redirect URL for a keyword+slug pair.
   // If the keyword matches the server hostname or its short alias, route directly to

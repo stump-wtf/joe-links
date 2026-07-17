@@ -184,6 +184,7 @@ func NewRouter(deps Deps) http.Handler {
 		KeywordStore:     deps.KeywordStore,
 		ClickStore:       deps.ClickStore,
 		Suggester:        deps.Suggester,
+		ShortKeyword:     deps.ShortKeyword,
 	})
 	r.Mount("/api/v1", apiRouter)
 

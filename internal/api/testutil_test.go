@@ -23,19 +23,35 @@ type testEnv struct {
 	UserStore      *store.UserStore
 	TokenStore     *auth.SQLTokenStore
 	ClickStore     *store.ClickStore
+	KeywordStore   *store.KeywordStore
 }
 
 // newTestEnv creates an in-memory SQLite test database, runs migrations,
 // and wires up the full API router with real stores.
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	return newTestEnvWithSuggester(t, nil)
+	return buildTestEnv(t, nil, "")
 }
 
 // newTestEnvWithSuggester is like newTestEnv but also injects an llm.Suggester
 // into the API router (nil means LLM suggestions are disabled).
 // Governing: SPEC-0017 REQ "Suggest API Endpoint"
 func newTestEnvWithSuggester(t *testing.T, suggester llm.Suggester) *testEnv {
+	t.Helper()
+	return buildTestEnv(t, suggester, "")
+}
+
+// newTestEnvWithShortKeyword is like newTestEnv but sets Deps.ShortKeyword,
+// simulating a deployment with JOE_SHORT_KEYWORD configured.
+// Governing: SPEC-0008 REQ "Keyword Host Discovery"
+func newTestEnvWithShortKeyword(t *testing.T, shortKeyword string) *testEnv {
+	t.Helper()
+	return buildTestEnv(t, nil, shortKeyword)
+}
+
+// buildTestEnv wires the full API router with real stores over an in-memory
+// SQLite database.
+func buildTestEnv(t *testing.T, suggester llm.Suggester, shortKeyword string) *testEnv {
 	t.Helper()
 	db := testutil.NewTestDB(t)
 
@@ -45,6 +61,7 @@ func newTestEnvWithSuggester(t *testing.T, suggester llm.Suggester) *testEnv {
 	us := store.NewUserStore(db)
 	ts := auth.NewSQLTokenStore(db)
 	cs := store.NewClickStore(db)
+	ks := store.NewKeywordStore(db)
 
 	bearerMW := auth.NewBearerTokenMiddleware(ts, us)
 
@@ -55,8 +72,10 @@ func newTestEnvWithSuggester(t *testing.T, suggester llm.Suggester) *testEnv {
 		OwnershipStore:   owns,
 		TagStore:         tags,
 		UserStore:        us,
+		KeywordStore:     ks,
 		ClickStore:       cs,
 		Suggester:        suggester,
+		ShortKeyword:     shortKeyword,
 	}
 
 	router := api.NewAPIRouter(deps)
@@ -69,6 +88,7 @@ func newTestEnvWithSuggester(t *testing.T, suggester llm.Suggester) *testEnv {
 		UserStore:      us,
 		TokenStore:     ts,
 		ClickStore:     cs,
+		KeywordStore:   ks,
 	}
 }
 

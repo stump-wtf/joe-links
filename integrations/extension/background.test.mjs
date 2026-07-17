@@ -268,3 +268,153 @@ test('direct keyword-host navigation preserves the query string', async () => {
     { tabId: 7, url: 'https://go.stump.rocks/jira/ABC-123?focus=1' },
   ]);
 });
+
+// --- #210: server-configured short keyword (JOE_SHORT_KEYWORD) --------------
+
+// Deployment shape from the issue: UI advertises "go/" but the server lives at
+// links.example.com, so hostname-derived "links" is the WRONG alias.
+const OVERRIDE_STORAGE = {
+  baseURL: 'https://links.example.com',
+  keywords: ['links.example.com', 'go', 'jira'],
+  shortKeyword: 'go',
+};
+
+// fetch stub that dispatches on URL: /api/v1/keywords → bare array,
+// /api/v1/config → the given response.
+const dispatchFetch = (keywords, configRes) => async (url) => {
+  const u = String(url);
+  if (u.endsWith('/api/v1/keywords')) return { ok: true, json: async () => keywords };
+  if (u.endsWith('/api/v1/config')) return configRes;
+  throw new Error(`unexpected fetch ${u}`);
+};
+
+test('refresh stores the server-configured short keyword and merges it into keywords', async () => {
+  const storage = { baseURL: 'https://links.example.com' };
+  const { captured } = loadBackground({
+    storage,
+    fetchImpl: dispatchFetch(['jira'], { ok: true, json: async () => ({ short_keyword: 'go' }) }),
+  });
+  const result = await sendRefreshMessage(captured);
+  assert.equal(result.ok, true);
+  assert.equal(storage.shortKeyword, 'go');
+  assert.deepEqual(Array.from(storage.keywords), ['links.example.com', 'go', 'jira']);
+});
+
+test('refresh against an older server without /config falls back to the hostname label', async () => {
+  const storage = { baseURL: 'https://links.example.com' };
+  const { captured } = loadBackground({
+    storage,
+    fetchImpl: dispatchFetch(['jira'], { ok: false, status: 404 }),
+  });
+  const result = await sendRefreshMessage(captured);
+  assert.equal(result.ok, true);
+  // '' keeps the hostname fallback dynamic if the base URL later changes.
+  assert.equal(storage.shortKeyword, '');
+  assert.deepEqual(Array.from(storage.keywords), ['links.example.com', 'links', 'jira']);
+});
+
+test('a /config network error does not fail the keyword refresh', async () => {
+  const storage = { baseURL: 'https://links.example.com' };
+  const { captured } = loadBackground({
+    storage,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith('/api/v1/keywords')) return { ok: true, json: async () => [] };
+      throw new TypeError('Failed to fetch');
+    },
+  });
+  const result = await sendRefreshMessage(captured);
+  assert.equal(result.ok, true);
+  assert.equal(storage.shortKeyword, '');
+});
+
+test('a transient /config failure keeps the previously stored short keyword', async () => {
+  // A 5xx (or timeout/LB blip) is NOT "endpoint absent" — wiping the stored
+  // value would revert interception to the wrong hostname alias for an hour.
+  for (const configRes of [{ ok: false, status: 500 }, { ok: false, status: 503 }]) {
+    const storage = { baseURL: 'https://links.example.com', shortKeyword: 'go' };
+    const { captured } = loadBackground({
+      storage,
+      fetchImpl: dispatchFetch(['jira'], configRes),
+    });
+    const result = await sendRefreshMessage(captured);
+    assert.equal(result.ok, true);
+    assert.equal(storage.shortKeyword, 'go');
+    assert.deepEqual(Array.from(storage.keywords), ['links.example.com', 'go', 'jira']);
+  }
+});
+
+test('a /config network error keeps the previously stored short keyword', async () => {
+  const storage = { baseURL: 'https://links.example.com', shortKeyword: 'go' };
+  const { captured } = loadBackground({
+    storage,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith('/api/v1/keywords')) return { ok: true, json: async () => ['jira'] };
+      throw new TypeError('Failed to fetch');
+    },
+  });
+  const result = await sendRefreshMessage(captured);
+  assert.equal(result.ok, true);
+  assert.equal(storage.shortKeyword, 'go');
+  assert.deepEqual(Array.from(storage.keywords), ['links.example.com', 'go', 'jira']);
+});
+
+test('a definitive 404 from /config clears a stale stored short keyword', async () => {
+  // Only a 404 means the endpoint (and thus the override) is really gone —
+  // e.g. baseURL repointed at an older server.
+  const storage = { baseURL: 'https://links.example.com', shortKeyword: 'go' };
+  const { captured } = loadBackground({
+    storage,
+    fetchImpl: dispatchFetch(['jira'], { ok: false, status: 404 }),
+  });
+  const result = await sendRefreshMessage(captured);
+  assert.equal(result.ok, true);
+  assert.equal(storage.shortKeyword, '');
+  assert.deepEqual(Array.from(storage.keywords), ['links.example.com', 'links', 'jira']);
+});
+
+test('an uppercase configured short keyword is lowercased for matching', async () => {
+  // Typed keywords are lowercased and URL hostnames are inherently lowercase,
+  // so a verbatim "Go" could never match without normalization.
+  const storage = { ...OVERRIDE_STORAGE, shortKeyword: 'Go', keywords: ['links.example.com'] };
+  const { context, captured } = loadBackground({ storage });
+  await context.updateRedirectRules();
+  assert.equal(applyDNR(captured.dnrRules, 'http://go/slack'), 'https://links.example.com/slack');
+  await navigate(captured, googleSearch('go/slack'));
+  assert.deepEqual(captured.tabUpdates, [{ tabId: 7, url: 'https://links.example.com/slack' }]);
+});
+
+test('DNR rule for the configured short keyword swaps host without double prefix', async () => {
+  const { context, captured } = loadBackground({ storage: { ...OVERRIDE_STORAGE } });
+  await context.updateRedirectRules();
+  assert.equal(applyDNR(captured.dnrRules, 'http://go/slack'), 'https://links.example.com/slack');
+  // Template keywords still route via the keyword path segment.
+  assert.equal(applyDNR(captured.dnrRules, 'http://jira/ABC-123'), 'https://links.example.com/jira/ABC-123');
+});
+
+test('search interception honors the configured short keyword', async () => {
+  const { captured } = loadBackground({ storage: { ...OVERRIDE_STORAGE } });
+  await navigate(captured, googleSearch('go/slack'));
+  assert.deepEqual(captured.tabUpdates, [{ tabId: 7, url: 'https://links.example.com/slack' }]);
+});
+
+test('configured short keyword intercepts even when storage keywords are stale', async () => {
+  const { captured } = loadBackground({
+    storage: { ...OVERRIDE_STORAGE, keywords: ['links.example.com'] },
+  });
+  await navigate(captured, googleSearch('go/slack'));
+  assert.deepEqual(captured.tabUpdates, [{ tabId: 7, url: 'https://links.example.com/slack' }]);
+});
+
+test('direct navigation to the configured short keyword host redirects (Firefox path)', async () => {
+  const { captured } = loadBackground({ storage: { ...OVERRIDE_STORAGE } });
+  await navigate(captured, 'http://go/slack');
+  assert.deepEqual(captured.tabUpdates, [{ tabId: 7, url: 'https://links.example.com/slack' }]);
+});
+
+test('without a stored short keyword the hostname-derived alias still works', async () => {
+  const { captured } = loadBackground({
+    storage: { baseURL: 'https://links.example.com', keywords: ['links.example.com'] },
+  });
+  await navigate(captured, googleSearch('links/slack'));
+  assert.deepEqual(captured.tabUpdates, [{ tabId: 7, url: 'https://links.example.com/slack' }]);
+});

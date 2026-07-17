@@ -1,7 +1,19 @@
 // Governing: SPEC-0008 REQ "Browser Action — Create Link", ADR-0012
 'use strict';
 
-const DEFAULTS = { baseURL: 'http://go', apiKey: '' };
+const DEFAULTS = { baseURL: 'http://go', apiKey: '', shortKeyword: '' };
+
+// Resolve the short-link prefix: prefer the server-configured short keyword
+// discovered by the background worker via GET /api/v1/config (JOE_SHORT_KEYWORD
+// deployments, e.g. "go/" on links.example.com), else the base URL hostname's
+// first label. Lowercased to match interception, which compares lowercased
+// keywords and inherently lowercase URL hostnames — mirrors resolveServerKeyword
+// in background.js.
+// Governing: SPEC-0008 REQ "Keyword Host Discovery"
+function resolveServerKeyword(baseURL, storedShortKeyword) {
+  if (typeof storedShortKeyword === 'string' && storedShortKeyword) return storedShortKeyword.toLowerCase();
+  try { return new URL(baseURL).hostname.split('.')[0]; } catch { return 'go'; }
+}
 
 const ICON_CLIPBOARD = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>`;
 const ICON_CHECK     = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`;
@@ -264,7 +276,7 @@ function applySuggestion(key, suggestions) {
 document.addEventListener('DOMContentLoaded', async () => {
   setupTagInput();
 
-  const { baseURL, apiKey } = await chrome.storage.local.get(DEFAULTS);
+  const { baseURL, apiKey, shortKeyword } = await chrome.storage.local.get(DEFAULTS);
 
   // Governing: SPEC-0008 REQ "Browser Action — Create Link" scenario "no API key"
   if (!apiKey) {
@@ -281,10 +293,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     hint.hidden = !hint.hidden;
   });
 
-  // Derive the short-link prefix from the base URL hostname.
-  // e.g. baseURL="https://go.stump.rocks" → serverKeyword="go"
-  let serverKeyword = 'go';
-  try { serverKeyword = new URL(baseURL).hostname.split('.')[0]; } catch {}
+  // Short-link prefix: server-configured short keyword, else base URL hostname
+  // first label — e.g. baseURL="https://go.stump.rocks" → serverKeyword="go".
+  const serverKeyword = resolveServerKeyword(baseURL, shortKeyword);
 
   // Show the server keyword prefix in the slug field.
   document.getElementById('slug-prefix').textContent = serverKeyword + '/';
@@ -451,11 +462,10 @@ document.getElementById('create').addEventListener('click', async () => {
   btn.textContent = 'Creating…';
   clearStatus();
 
-  const { baseURL, apiKey } = await chrome.storage.local.get(DEFAULTS);
+  const { baseURL, apiKey, shortKeyword } = await chrome.storage.local.get(DEFAULTS);
 
-  // Derive short-link prefix.
-  let serverKeyword = 'go';
-  try { serverKeyword = new URL(baseURL).hostname.split('.')[0]; } catch {}
+  // Derive short-link prefix (server-configured, else hostname first label).
+  const serverKeyword = resolveServerKeyword(baseURL, shortKeyword);
 
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
