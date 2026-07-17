@@ -51,6 +51,12 @@ func NewRouter(deps Deps) http.Handler {
 		configuredShortKeyword = deps.ShortKeyword
 	}
 
+	// Styled 403 page for web-UI RequireRole failures (e.g. a non-admin
+	// hitting /admin/*). Injected because auth cannot import handler.
+	// REST API 403s are unaffected: /api/v1 uses its own JSON writeError.
+	// Governing: SPEC-0001 REQ "Role-Based Access Control", ADR-0003
+	deps.AuthMiddleware.Forbidden = RenderForbidden
+
 	r := chi.NewRouter()
 
 	// Standard middleware

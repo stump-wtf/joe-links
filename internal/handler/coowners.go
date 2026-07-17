@@ -4,6 +4,7 @@ package handler
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -23,8 +24,13 @@ func (h *LinksHandler) AddOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
-	if err != nil || !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
 		return
 	}
 
@@ -67,8 +73,13 @@ func (h *LinksHandler) RemoveOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
-	if err != nil || !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
 		return
 	}
 
@@ -96,8 +107,13 @@ func (h *LinksHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
-	if err != nil || !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
 		return
 	}
 
@@ -189,8 +205,13 @@ func (h *LinksHandler) AddShare(w http.ResponseWriter, r *http.Request) {
 	}
 	// Governing: SPEC-0010 REQ "Link Share Management Endpoints" — only owners, co-owners, and admins
 	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
-	if err != nil || !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
 		return
 	}
 
@@ -230,8 +251,13 @@ func (h *LinksHandler) RemoveShare(w http.ResponseWriter, r *http.Request) {
 	}
 	// Governing: SPEC-0010 REQ "Link Share Management Endpoints" — only owners, co-owners, and admins
 	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
-	if err != nil || !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
 		return
 	}
 

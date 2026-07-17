@@ -66,8 +66,8 @@ func (h *StatsHandler) Show(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !isOwner {
-			w.WriteHeader(http.StatusForbidden)
-			render(w, "403.html", newBasePage(r, user))
+			// Governing: SPEC-0016 REQ "Link Stats Dashboard Page" — styled 403, not bare text
+			RenderForbidden(w, r)
 			return
 		}
 	}

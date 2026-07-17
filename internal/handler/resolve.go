@@ -197,26 +197,13 @@ func (h *ResolveHandler) checkVisibility(w http.ResponseWriter, r *http.Request,
 		if err == nil && hasShare {
 			return true
 		}
-		// Not authorized
-		h.render403(w, r)
+		// Not authorized — shared styled 403 renderer
+		RenderForbidden(w, r)
 		return false
 	default:
 		// Unknown visibility — treat as public
 		return true
 	}
-}
-
-// render403 renders a 403 Forbidden page.
-// Governing: SPEC-0010 REQ "Secure Link Resolution"
-func (h *ResolveHandler) render403(w http.ResponseWriter, r *http.Request) {
-	user := auth.UserFromContext(r.Context())
-	w.WriteHeader(http.StatusForbidden)
-	data := notFoundPage{BasePage: newBasePage(r, user), User: user, Slug: ""}
-	if isHTMX(r) {
-		renderPageFragment(w, "403.html", "content", data)
-		return
-	}
-	render(w, "403.html", data)
 }
 
 // redirect issues a 302 redirect, handling HTMX requests with HX-Redirect header.

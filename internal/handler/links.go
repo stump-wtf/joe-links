@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -225,8 +226,13 @@ func (h *LinksHandler) Edit(w http.ResponseWriter, r *http.Request) {
 
 	// Governing: SPEC-0002 REQ "Authorization Based on Ownership"
 	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
-	if err != nil || !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
 		return
 	}
 
@@ -267,8 +273,13 @@ func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// Governing: SPEC-0002 REQ "Authorization Based on Ownership"
 	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
-	if err != nil || !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
 		return
 	}
 
@@ -364,8 +375,13 @@ func (h *LinksHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	// Governing: SPEC-0002 REQ "Authorization Based on Ownership"
 	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
-	if err != nil || !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
 		return
 	}
 
@@ -394,8 +410,13 @@ func (h *LinksHandler) ConfirmDelete(w http.ResponseWriter, r *http.Request) {
 
 	// Governing: SPEC-0002 REQ "Authorization Based on Ownership"
 	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
-	if err != nil || !allowed {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
 		return
 	}
 

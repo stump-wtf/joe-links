@@ -18,6 +18,13 @@ const UserContextKey contextKey = "user"
 type Middleware struct {
 	sessions *scs.SessionManager
 	users    *store.UserStore
+
+	// Forbidden, when set, renders 403 responses for RequireRole failures
+	// (e.g. the styled web-UI 403 page). When nil, a plain-text 403 is
+	// written. It is an injected field rather than a direct call because the
+	// handler package imports auth, so auth cannot import handler.
+	// Governing: SPEC-0001 REQ "Role-Based Access Control", ADR-0003
+	Forbidden http.HandlerFunc
 }
 
 // NewMiddleware creates a new auth Middleware.
@@ -74,6 +81,12 @@ func (m *Middleware) RequireRole(role string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := r.Context().Value(UserContextKey).(*store.User)
 			if !ok || user.Role != role {
+				// Governing: SPEC-0001 REQ "Role-Based Access Control" — styled
+				// 403 page when a renderer is injected, plain text otherwise.
+				if m.Forbidden != nil {
+					m.Forbidden(w, r)
+					return
+				}
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
