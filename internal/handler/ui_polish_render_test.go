@@ -4,13 +4,18 @@ package handler
 // detail page, footer build tooltip de-duplication, and UTC-labeled timestamps.
 
 import (
+	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/joestump/joe-links/internal/auth"
 	"github.com/joestump/joe-links/internal/build"
 	"github.com/joestump/joe-links/internal/store"
+	"github.com/joestump/joe-links/internal/testutil"
 )
 
 // TestLinkDetailRenders_VisibilityBadgeAndUTC verifies the detail page badges
@@ -114,5 +119,39 @@ func TestNewBasePage_DropsBranchWhenEqualToVersion(t *testing.T) {
 	build.Version, build.Branch = "dev", "main"
 	if got := newBasePage(r, nil); got.BuildBranch != "main" {
 		t.Errorf("BuildBranch should be preserved for branch builds; got %q", got.BuildBranch)
+	}
+}
+
+// The #tag-suggestions:empty CSS fix (issue #206) silently depends on the
+// suggest endpoint returning a truly empty body for no-result queries — a
+// single byte of whitespace would defeat :empty and re-float the invisible
+// dropdown over the form buttons. Pin the zero-byte contract.
+func TestTagSuggest_NoResultsBodyIsEmpty(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	owns := store.NewOwnershipStore(db)
+	tagStore := store.NewTagStore(db)
+	ls := store.NewLinkStore(db, owns, tagStore)
+	ks := store.NewKeywordStore(db)
+	us := store.NewUserStore(db)
+	u, err := us.Upsert(context.Background(), "test", "sugg", "sugg@example.com", "Sugg", "user")
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	tags := NewTagsHandler(tagStore, ls, owns, ks)
+
+	r := chi.NewRouter()
+	r.Get("/dashboard/tags/suggest", tags.Suggest)
+
+	for _, q := range []string{"", "?q=", "?q=zzzz-no-such-tag"} {
+		req := httptest.NewRequest(http.MethodGet, "/dashboard/tags/suggest"+q, nil)
+		req = req.WithContext(context.WithValue(req.Context(), auth.UserContextKey, u))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("q=%q status = %d, want 200", q, w.Code)
+		}
+		if w.Body.Len() != 0 {
+			t.Errorf("q=%q body length = %d, want 0 (defeats #tag-suggestions:empty)", q, w.Body.Len())
+		}
 	}
 }
