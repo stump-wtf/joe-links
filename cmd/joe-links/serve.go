@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -63,7 +64,11 @@ func newServeCmd() *cobra.Command {
 			// Governing: SPEC-0016 REQ "Click Recording", ADR-0016
 			clickCh := make(chan store.ClickEvent, 256)
 			clickStore := store.NewClickStore(database)
-			go runClickWriter(ctx, clickCh, clickStore)
+			writerDone := make(chan struct{})
+			go func() {
+				defer close(writerDone)
+				runClickWriter(ctx, clickCh, clickStore)
+			}()
 
 			// Governing: SPEC-0016 REQ "Prometheus Metrics Endpoint", ADR-0016
 			go runGaugeUpdater(ctx, linkStore, userStore)
@@ -101,21 +106,51 @@ func newServeCmd() *cobra.Command {
 				Handler: router,
 			}
 
-			go func() {
-				<-ctx.Done()
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				close(clickCh) // signal writer to drain
-				_ = srv.Shutdown(shutdownCtx)
-			}()
-
-			log.Printf("listening on %s", cfg.HTTP.Addr)
-			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			ln, err := net.Listen("tcp", cfg.HTTP.Addr)
+			if err != nil {
 				return err
 			}
-			return nil
+
+			log.Printf("listening on %s", cfg.HTTP.Addr)
+			return serveAndDrain(ctx, srv, ln, clickCh, writerDone, 30*time.Second)
 		},
 	}
+}
+
+// serveAndDrain serves srv on ln until ctx is cancelled or the server fails,
+// then completes the click-recording shutdown sequence in order: srv.Shutdown
+// waits for in-flight requests (so no handler can send on a closed channel),
+// clickCh is closed only after that, and writerDone is awaited so queued
+// clicks are persisted before the caller closes the database. The drain wait
+// is bounded by shutdownTimeout so a hung database cannot wedge shutdown
+// indefinitely (at that point clicks cannot be persisted anyway).
+// Governing: SPEC-0016 REQ "Click Recording", ADR-0016
+func serveAndDrain(ctx context.Context, srv *http.Server, ln net.Listener, clickCh chan<- store.ClickEvent, writerDone <-chan struct{}, shutdownTimeout time.Duration) error {
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
+
+	var err error
+	select {
+	case err = <-serveErr:
+		// Server failed on its own; nothing to shut down gracefully.
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+		err = <-serveErr
+	}
+
+	close(clickCh) // no senders remain: signal writer to drain
+	select {
+	case <-writerDone: // drain complete before the deferred database.Close()
+	case <-time.After(shutdownTimeout):
+		log.Printf("click writer: drain timed out after %s; buffered clicks may be lost", shutdownTimeout)
+	}
+
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // runClickWriter reads click events from the channel and persists them.
