@@ -70,6 +70,25 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Check built CSS is up to date
+        # Same freshness contract as the swagger check above: the committed
+        # web/static/css/app.css must match what `make css` produces from the
+        # current templates, or Tailwind classes added in templates silently
+        # ship unstyled to anyone running the committed artifact. Caught a
+        # real instance on introduction (missing .tab styles). See issue #213.
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          if ! git diff --exit-code web/static/css/; then
+            echo "::error::web/static/css/ is stale. Run 'npm ci && npm run build' (make css assumes fresh node_modules) and commit the result."
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain web/static/css/)" ]; then
+            echo "::error::web/static/css/ has untracked files. Run 'npm ci && npm run build' and commit the result."
+            git status --porcelain web/static/css/
+            exit 1
+          fi
+
       - name: Lint extension (AMO addons-linter)
         # Pinned (not "latest") so lint results are reproducible, same as
         # golangci-lint above. See issue #213.
@@ -94,7 +113,10 @@ jobs:
           go-version-file: go.mod
 
       - name: Run tests
-        run: go test ./...
+        # -race: the click-recording pipeline, session middleware, and MCP
+        # handler all touch shared state from goroutines; run the detector in
+        # CI where the extra runtime cost doesn't matter. See issue #213.
+        run: go test -race ./...
 
       - uses: actions/setup-node@v4
         with:

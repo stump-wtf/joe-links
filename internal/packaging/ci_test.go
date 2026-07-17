@@ -167,3 +167,28 @@ func TestCIWorkflowDeploysDocsFromMain(t *testing.T) {
 		t.Error("ci.yml docs job must deploy on main pushes as well as tags (issue #213)")
 	}
 }
+
+func TestCIWorkflowHasCSSFreshnessGate(t *testing.T) {
+	ci := readCIWorkflow(t)
+
+	// The committed web/static/css/app.css must be rebuilt whenever templates
+	// change Tailwind class usage; without the gate stale CSS ships unstyled
+	// UI to anyone running the committed artifact (caught a real instance:
+	// missing .tab styles). Mirrors the swagger gate, both halves.
+	if !strings.Contains(ci, "git diff --exit-code web/static/css/") {
+		t.Error("ci.yml must gate CSS freshness with `git diff --exit-code web/static/css/` (issue #213)")
+	}
+	if !strings.Contains(ci, "git status --porcelain web/static/css/") {
+		t.Error("ci.yml CSS gate must also check `git status --porcelain web/static/css/` for untracked files (issue #213)")
+	}
+}
+
+func TestCIWorkflowRunsTestsWithRaceDetector(t *testing.T) {
+	ci := readCIWorkflow(t)
+
+	// The click pipeline, session middleware, and MCP handler cross
+	// goroutines; CI is where the race detector's runtime cost is free.
+	if !regexp.MustCompile(`go test\s+-race\s`).MatchString(ci) {
+		t.Error("ci.yml test job must run `go test -race ./...` (issue #213)")
+	}
+}
