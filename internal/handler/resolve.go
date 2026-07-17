@@ -98,6 +98,15 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 		if !h.checkVisibility(w, r, link) {
 			return
 		}
+		// A variable link visited with no variable segments would redirect to
+		// the literal placeholder URL (e.g. https://.../browse/$ticket). Treat
+		// it as an arity mismatch (zero provided), consistent with Step 2.
+		// Governing: SPEC-0009 REQ "Variable Substitution and Redirect", ADR-0013
+		if varPlaceholderRe.MatchString(link.URL) {
+			metrics.RedirectsTotal.WithLabelValues("not_found").Inc()
+			h.render404(w, r, fullPath)
+			return
+		}
 		metrics.RedirectsTotal.WithLabelValues("found").Inc()
 		h.redirect(w, r, link.ID, link.URL)
 		return
@@ -148,11 +157,17 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Substitute positionally with url.PathEscape.
-			target := link.URL
+			// Substitute positionally with url.PathEscape in a single regex
+			// pass. Sequential ReplaceAll corrupted templates whose variable
+			// names share a prefix ($env rewrote the $env inside $env_id) and
+			// re-scanned already-substituted values for placeholders.
+			values := make(map[string]string, len(unique))
 			for j, placeholder := range unique {
-				target = strings.ReplaceAll(target, placeholder, url.PathEscape(remaining[j]))
+				values[placeholder] = url.PathEscape(remaining[j])
 			}
+			target := varPlaceholderRe.ReplaceAllStringFunc(link.URL, func(m string) string {
+				return values[m]
+			})
 
 			metrics.RedirectsTotal.WithLabelValues("found").Inc()
 			h.redirect(w, r, link.ID, target)
@@ -217,7 +232,10 @@ func (h *ResolveHandler) redirect(w http.ResponseWriter, r *http.Request, linkID
 		http.Redirect(w, r, target, http.StatusFound)
 	}
 
-	if h.clickCh != nil {
+	// HEAD probes (link checkers, unfurl bots, curl -I) are not visits;
+	// recording them would inflate click stats.
+	// Governing: SPEC-0016 REQ "Click Recording", ADR-0016
+	if h.clickCh != nil && r.Method != http.MethodHead {
 		var userID string
 		if u := auth.UserFromContext(r.Context()); u != nil {
 			userID = u.ID

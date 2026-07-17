@@ -63,6 +63,12 @@ func NewRouter(deps Deps) http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
+	// Route HEAD requests through GET handlers (chi registers GET-only routes,
+	// so HEAD would otherwise 405). Link checkers, mail scanners, and unfurl
+	// bots probe short links with HEAD; http.Redirect already suppresses the
+	// body for HEAD, and the resolver skips click recording for it.
+	// Governing: SPEC-0001 REQ "Short Link Resolution"
+	r.Use(middleware.GetHead)
 	r.Use(deps.SessionManager.LoadAndSave)
 
 	// Static assets (embedded). Use fs.Sub so the file server sees

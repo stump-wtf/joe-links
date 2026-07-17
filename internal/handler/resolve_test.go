@@ -138,6 +138,50 @@ func TestResolve_MultipleVariables(t *testing.T) {
 	}
 }
 
+// Issue #195: sequential ReplaceAll rewrote the $env prefix inside $env_id,
+// producing .../prod/deploy/prod_id and silently dropping the second value.
+func TestResolve_PrefixCollidingVariableNames(t *testing.T) {
+	env := newResolveTestEnv(t)
+	env.seedLink(t, "deploy", "https://example.com/$env/deploy/$env_id")
+
+	w := env.resolve(t, "/deploy/prod/42")
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusFound)
+	}
+	loc := w.Header().Get("Location")
+	if loc != "https://example.com/prod/deploy/42" {
+		t.Errorf("Location = %q, want %q", loc, "https://example.com/prod/deploy/42")
+	}
+}
+
+// Issue #195: a substituted value that itself looks like a placeholder must
+// not be re-substituted by a later pass.
+func TestResolve_ValueContainingPlaceholderText(t *testing.T) {
+	env := newResolveTestEnv(t)
+	env.seedLink(t, "combo", "https://example.com/$a/$b")
+
+	w := env.resolve(t, "/combo/$b/second")
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusFound)
+	}
+	loc := w.Header().Get("Location")
+	if loc != "https://example.com/$b/second" {
+		t.Errorf("Location = %q, want %q", loc, "https://example.com/$b/second")
+	}
+}
+
+// Issue #195: visiting a variable link with no variable segments redirected to
+// the literal placeholder URL; it must 404 like every other arity mismatch.
+func TestResolve_BareSlugVariableLink404(t *testing.T) {
+	env := newResolveTestEnv(t)
+	env.seedLink(t, "jira", "https://example.com/browse/$ticket?src=go")
+
+	w := env.resolve(t, "/jira")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
 func TestResolve_ArityMismatch_TooFew(t *testing.T) {
 	env := newResolveTestEnv(t)
 	env.seedLink(t, "my-link", "https://example.com/?q=$query&page=$page")
