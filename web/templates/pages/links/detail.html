@@ -5,7 +5,13 @@
 {{if .Link}}
 <div class="mb-6">
     <div class="flex items-center justify-between mb-4">
-        <h1 class="text-2xl font-bold font-mono">{{.Link.Slug}}</h1>
+        <div class="flex items-center gap-3">
+            <h1 class="text-2xl font-bold font-mono">{{.Link.Slug}}</h1>
+            <!-- Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — badge the
+                 link's visibility so owners can tell secure/private from public at a
+                 glance (issue #206); colors match the shared link_row partial. -->
+            <span class="badge {{if eq .Link.Visibility "secure"}}badge-error{{else if eq .Link.Visibility "private"}}badge-warning{{else}}badge-ghost{{end}}">{{.Link.Visibility}}</span>
+        </div>
         <div class="flex gap-2">
             <a href="/dashboard/links/{{.Link.ID}}/stats" class="btn btn-sm btn-ghost">Stats</a>
             <!-- Governing: SPEC-0010 REQ "Link Shares Table" — mutating controls are
@@ -58,9 +64,12 @@
             </div>
             {{end}}
 
+            <!-- Timestamps are stored and rendered in UTC; label them so readers
+                 aren't left guessing the zone (issue #206). Local-timezone
+                 rendering is deferred to epic #216. -->
             <div class="text-xs text-base-content/50 mt-4">
-                Created {{.Link.CreatedAt.Format "Jan 2, 2006 3:04 PM"}} &middot;
-                Updated {{.Link.UpdatedAt.Format "Jan 2, 2006 3:04 PM"}}
+                Created {{.Link.CreatedAt.UTC.Format "Jan 2, 2006 3:04 PM"}} UTC &middot;
+                Updated {{.Link.UpdatedAt.UTC.Format "Jan 2, 2006 3:04 PM"}} UTC
             </div>
         </div>
     </div>

@@ -119,15 +119,19 @@ func (h *DashboardHandler) Show(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := DashboardPage{
-		BasePage:    newBasePage(r, user),
-		User:        user,
-		Links:       links,
-		Tags:        allTags,
-		Query:       query,
-		Tag:         tagSlug,
-		Filter:      filter,
-		ShowActions: true,
-		RowCaps:     rowCaps,
+		BasePage: newBasePage(r, user),
+		User:     user,
+		Links:    links,
+		Tags:     allTags,
+		Query:    query,
+		Tag:      tagSlug,
+		Filter:   filter,
+		// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — badge each
+		// row so owners can tell their secure/private links from public ones at
+		// a glance (issue #206).
+		ShowVisibility: true,
+		ShowActions:    true,
+		RowCaps:        rowCaps,
 	}
 
 	if isHTMX(r) {

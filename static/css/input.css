@@ -1,3 +1,11 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Governing: SPEC-0004 REQ "New Link Form" — tag autocomplete via HTMX.
+   When HTMX swaps in zero suggestions the empty .menu box (padding + shadow,
+   absolute z-10) still floats over the Cancel/Create row and swallows the
+   first click; hide it entirely until it has children (issue #206). */
+#tag-suggestions:empty {
+    display: none;
+}

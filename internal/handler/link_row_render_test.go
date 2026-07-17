@@ -221,9 +221,11 @@ func TestDashboardLinkListRenders_StoreLink(t *testing.T) {
 		CreatedAt:   time.Now(),
 	}
 	data := DashboardPage{
-		BasePage:    newBasePage(r, nil),
-		Links:       []*store.Link{l},
-		ShowActions: true, // matches DashboardHandler.Show; all other Show* false
+		BasePage: newBasePage(r, nil),
+		Links:    []*store.Link{l},
+		// matches DashboardHandler.Show; all other Show* false
+		ShowVisibility: true,
+		ShowActions:    true,
 		// Governing: SPEC-0010 — owner rows get full per-row capabilities
 		RowCaps: map[string]store.LinkCaps{l.ID: store.NewLinkCaps(true, false, false)},
 	}
@@ -235,5 +237,9 @@ func TestDashboardLinkListRenders_StoreLink(t *testing.T) {
 	}
 	if !strings.Contains(body, "/dashboard/links/"+l.ID+"/stats") {
 		t.Errorf("dashboard row should show stats action; body=%s", body)
+	}
+	// Governing: SPEC-0010 — the owner's own dashboard badges visibility (#206)
+	if !strings.Contains(body, "<th>Visibility</th>") || !strings.Contains(body, "badge-ghost") {
+		t.Errorf("dashboard link_list should render the Visibility column with a badge; body=%s", body)
 	}
 }
