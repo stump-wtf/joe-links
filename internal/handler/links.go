@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -189,23 +190,26 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := h.links.Create(r.Context(), form.Slug, form.URL, user.ID, form.Title, form.Description, form.Visibility)
+	// Create the link and its tags in a single transaction: a failed tag write
+	// rolls back the link too, so it re-renders the form with an error instead
+	// of silently dropping the tags (issue #198).
+	// Governing: SPEC-0004 REQ "New Link Form" — link+tags create atomically; ADR-0018
+	tagNames := parseTagNames(form.Tags)
+	_, err := h.links.CreateFull(r.Context(), form.Slug, form.URL, user.ID, form.Title, form.Description, form.Visibility, tagNames, nil, "")
 	if err != nil {
-		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Form: form, Error: "That slug is already taken. Choose a different one."}
+		msg := "Could not create the link. Please try again."
+		if errors.Is(err, store.ErrSlugTaken) {
+			msg = "That slug is already taken. Choose a different one."
+		} else {
+			log.Printf("create link %q: %v", form.Slug, err)
+		}
+		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Form: form, Error: msg}
 		if isHTMX(r) {
 			renderFragment(w, "new_link_modal", data)
 			return
 		}
 		render(w, "new.html", data)
 		return
-	}
-
-	// Set tags if provided
-	if form.Tags != "" {
-		tagNames := parseTagNames(form.Tags)
-		if len(tagNames) > 0 {
-			_ = h.links.SetTags(r.Context(), link.ID, tagNames)
-		}
 	}
 
 	// Governing: SPEC-0013 REQ "Create/Edit Link Form as HTMX Modal" — close modal + trigger list refresh
@@ -354,9 +358,21 @@ func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update tags
+	// Update tags. A failed tag write must surface to the user, not be
+	// silently discarded (issue #198).
+	// Governing: SPEC-0004 REQ "Edit Link Form"
 	tagNames := parseTagNames(form.Tags)
-	_ = h.links.SetTags(r.Context(), id, tagNames)
+	if err := h.links.SetTags(r.Context(), id, tagNames); err != nil {
+		log.Printf("set tags for link %s: %v", id, err)
+		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: "The link was saved, but its tags could not be updated. Please try again."}
+		// Governing: SPEC-0013 REQ "Create/Edit Link Form as HTMX Modal" — re-render inside modal on error
+		if isHTMX(r) {
+			renderFragment(w, "edit_link_modal", data)
+			return
+		}
+		render(w, "edit.html", data)
+		return
+	}
 
 	// Governing: SPEC-0013 REQ "Create/Edit Link Form as HTMX Modal" — close modal + trigger list refresh
 	if isHTMX(r) {

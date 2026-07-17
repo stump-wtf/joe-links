@@ -210,7 +210,11 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := h.links.Create(r.Context(), req.Slug, req.URL, user.ID, req.Title, req.Description, visibility)
+	// Create the link and its tags in a single transaction: if the tag write
+	// fails, no link row exists, so the client's retry cannot 409 on a
+	// half-created slug (issue #198).
+	// Governing: SPEC-0005 REQ "Links Collection" — link+tags create atomically; ADR-0018
+	link, err := h.links.CreateFull(r.Context(), req.Slug, req.URL, user.ID, req.Title, req.Description, visibility, req.Tags, nil, "")
 	if err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {
 			writeError(w, http.StatusConflict, "slug already exists", "SLUG_CONFLICT")
@@ -223,14 +227,6 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
 		return
-	}
-
-	// Set tags if provided.
-	if len(req.Tags) > 0 {
-		if err := h.links.SetTags(r.Context(), link.ID, req.Tags); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
-			return
-		}
 	}
 
 	lr, err := h.toLinkResponse(r.Context(), link)
@@ -378,9 +374,16 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update tags.
+	// Update tags. Duplicate spellings are deduped by slug inside SetTags; any
+	// remaining failure is reported clearly — the link row itself was already
+	// updated and PUT is idempotent, so the client can safely retry (issue #198).
 	if err := h.links.SetTags(r.Context(), link.ID, req.Tags); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		log.Printf("api: set tags for link %s: %v", link.ID, err)
+		if isDBLockError(err) {
+			writeError(w, http.StatusServiceUnavailable, "server is busy, please retry", "DB_BUSY")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "link updated but tags could not be saved; retry the request", "TAG_WRITE_FAILED")
 		return
 	}
 

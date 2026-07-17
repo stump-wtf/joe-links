@@ -539,7 +539,9 @@ func updateLinkTool(deps Deps) sdk.ToolHandlerFor[updateLinkIn, *linkPayload] {
 				tags = append(tags, tag)
 			}
 			if err := deps.LinkStore.SetTags(ctx, updated.ID, tags); err != nil {
-				return internalError("update tags", err), nil, nil
+				// Mirror REST's TAG_WRITE_FAILED semantics: the link row is
+				// already committed, tags are not; the call is retryable.
+				return internalError("update tags (link updated but tags could not be saved; retry)", err), nil, nil
 			}
 		}
 

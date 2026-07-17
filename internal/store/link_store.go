@@ -430,7 +430,11 @@ func (s *LinkStore) RemoveOwner(ctx context.Context, linkID, userID string) erro
 	return s.owns.RemoveOwner(linkID, userID)
 }
 
-// SetTags replaces the tag set for a link. Tags are upserted by name.
+// SetTags replaces the tag set for a link. Tags are upserted by name and
+// deduplicated by their upserted tag ID — i.e. by derived slug (ADR-0005), so
+// spelling variants of the same tag ("Jira", "jira") cannot collide on the
+// link_tags primary key and roll back the whole transaction. First occurrence
+// wins. Mirrors CreateFull's dedupe (issue #198).
 func (s *LinkStore) SetTags(ctx context.Context, linkID string, tagNames []string) error {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -444,12 +448,17 @@ func (s *LinkStore) SetTags(ctx context.Context, linkID string, tagNames []strin
 		return err
 	}
 
-	// Upsert each tag and link it.
+	// Upsert each tag and link it, skipping duplicates by tag ID.
+	seen := make(map[string]bool, len(tagNames))
 	for _, name := range tagNames {
 		tag, err := s.tags.upsertTx(ctx, tx, name)
 		if err != nil {
 			return err
 		}
+		if seen[tag.ID] {
+			continue
+		}
+		seen[tag.ID] = true
 		_, err = tx.ExecContext(ctx, tx.Rebind(`
 			INSERT INTO link_tags (link_id, tag_id) VALUES (?, ?)
 		`), linkID, tag.ID)

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/joestump/joe-links/internal/api"
+	"github.com/joestump/joe-links/internal/store"
 )
 
 func TestLinks_List_OK(t *testing.T) {
@@ -351,5 +353,91 @@ func TestLinks_Get_VariableURL_Passthrough(t *testing.T) {
 	}
 	if resp.URL != "https://example.com/$query/$page" {
 		t.Errorf("url = %q, want %q — API must return template as-is", resp.URL, "https://example.com/$query/$page")
+	}
+}
+
+// Creating a link with duplicate spellings of the same tag must return 201
+// with the tag attached once — not roll back the tag write and 500 after the
+// link row was created (issue #198).
+func TestLinks_Create_DuplicateTags_Deduped(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "alice@example.com", "user")
+	token := seedToken(t, env, user.ID)
+
+	body := `{"slug":"jira-board","url":"https://example.com","tags":["Jira","jira"]}`
+	req := httptest.NewRequest("POST", "/links", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	authRequest(req, token)
+	rec := httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var resp api.LinkResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Tags) != 1 || resp.Tags[0] != "Jira" {
+		t.Errorf("tags = %v, want exactly [Jira]", resp.Tags)
+	}
+}
+
+// Updating a link with duplicate tags must return 200 with the tag attached once.
+func TestLinks_Update_DuplicateTags_Deduped(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "alice@example.com", "user")
+	token := seedToken(t, env, user.ID)
+
+	link, err := env.LinkStore.Create(context.Background(), "edit-me", "https://example.com", user.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	body := `{"url":"https://example.com","tags":["Jira","jira","JIRA"]}`
+	req := httptest.NewRequest("PUT", "/links/"+link.ID, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	authRequest(req, token)
+	rec := httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp api.LinkResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Tags) != 1 || resp.Tags[0] != "Jira" {
+		t.Errorf("tags = %v, want exactly [Jira]", resp.Tags)
+	}
+}
+
+// If the tag write fails during create, the link and its tags roll back
+// together: the client gets a 500 with no half-created link, so a retry does
+// not 409 on its own slug (issue #198).
+func TestLinks_Create_TagWriteFailure_NoHalfCreatedLink(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "alice@example.com", "user")
+	token := seedToken(t, env, user.ID)
+
+	// Force every link_tags write to fail.
+	env.DB.MustExec("DROP TABLE link_tags")
+
+	body := `{"slug":"doomed","url":"https://example.com","tags":["jira"]}`
+	req := httptest.NewRequest("POST", "/links", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	authRequest(req, token)
+	rec := httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+
+	if _, err := env.LinkStore.GetBySlug(context.Background(), "doomed"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetBySlug after failed create = %v, want ErrNotFound (no half-created resource)", err)
 	}
 }

@@ -390,3 +390,46 @@ func TestLinkStore_Create_OwnerCreatedAt(t *testing.T) {
 		t.Errorf("link_owners.created_at = %v, want a non-zero timestamp", createdAt)
 	}
 }
+
+// SetTags must dedupe tag names that derive the same slug (ADR-0005) instead
+// of violating the link_tags primary key and rolling back the whole write
+// (issue #198). First occurrence wins.
+func TestLinkStore_SetTags_DedupesBySlug(t *testing.T) {
+	cases := []struct {
+		name string
+		slug string
+		tags []string
+		want []string // expected tag names after SetTags, in ListTags order (name ASC)
+	}{
+		{"case variants", "dedupe-case", []string{"Jira", "jira"}, []string{"Jira"}},
+		{"exact duplicates", "dedupe-exact", []string{"go", "go"}, []string{"go"}},
+		{"mixed", "dedupe-mixed", []string{"Jira", "jira", "Go Tools", "go_tools", "docs"}, []string{"Go Tools", "Jira", "docs"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ls, _, _, userID := newTestEnv(t)
+			ctx := context.Background()
+
+			link, err := ls.Create(ctx, tc.slug, "https://example.com/"+tc.slug, userID, "", "", "")
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if err := ls.SetTags(ctx, link.ID, tc.tags); err != nil {
+				t.Fatalf("SetTags(%v) = %v, want nil", tc.tags, err)
+			}
+
+			tags, err := ls.ListTags(ctx, link.ID)
+			if err != nil {
+				t.Fatalf("ListTags: %v", err)
+			}
+			if len(tags) != len(tc.want) {
+				t.Fatalf("len(tags) = %d, want %d (%+v)", len(tags), len(tc.want), tags)
+			}
+			for i, want := range tc.want {
+				if tags[i].Name != want {
+					t.Errorf("tags[%d].Name = %q, want %q", i, tags[i].Name, want)
+				}
+			}
+		})
+	}
+}
