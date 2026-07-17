@@ -24,6 +24,12 @@ concurrency:
   group: ci-${{ (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main') && github.ref || github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
+# Default every job to a read-only token (PR #253 security review). Jobs that
+# genuinely write (release upload, GHCR push, Pages deploy) already declare
+# their own per-job permissions blocks, which override this default.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint
@@ -98,6 +104,54 @@ jobs:
         # The shell expands the glob to explicit file paths, so this works on
         # Node < 21 (node --test only learned glob patterns in Node 21).
         run: node --test integrations/extension/*.test.mjs
+
+  xcode:
+    name: Xcode (unsigned build check)
+    # Catches extension changes that break the committed Safari Web Extension
+    # Xcode project (SPEC-0015, issue #133). Unsigned on purpose: no Apple
+    # credentials in CI until #221/#134 land — CODE_SIGNING_ALLOWED=NO builds
+    # everything except the signature. Gated behind a paths check so the slow
+    # macOS runner only spins up when Apple/extension files changed.
+    runs-on: ubuntu-latest
+    # paths-filter reads the PR file list via the API on pull_request events.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      apple: ${{ steps.filter.outputs.apple }}
+    steps:
+      - uses: actions/checkout@v4
+      # SHA-pinned (not a mutable tag): third-party action in the same niche
+      # as the 2025 tj-actions/changed-files tag-repoint compromise. See PR
+      # #253 security review.
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            apple:
+              - 'integrations/apple/**'
+              - 'integrations/extension/**'
+              - '.github/workflows/ci.yml'
+
+  xcode-build:
+    name: Xcode build (macOS)
+    needs: xcode
+    if: needs.xcode.outputs.apple == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build macOS app (unsigned)
+        run: |
+          xcodebuild -project integrations/apple/joe-links.xcodeproj \
+            -target "joe-links (macOS)" -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Build iOS app (unsigned, simulator SDK)
+        run: |
+          xcodebuild -project integrations/apple/joe-links.xcodeproj \
+            -target "joe-links (iOS)" -sdk iphonesimulator -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 
   build:
     name: Build & Release
