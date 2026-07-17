@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/joestump/joe-links/internal/store"
 	"github.com/joestump/joe-links/internal/testutil"
 )
@@ -144,5 +146,394 @@ func TestUpsert_SpecialCharacterSlug(t *testing.T) {
 	}
 	if u.DisplayNameSlug != "joe-obrien-iii" {
 		t.Errorf("slug = %q, want %q", u.DisplayNameSlug, "joe-obrien-iii")
+	}
+}
+
+// newDeleteTestEnv builds the stores DeleteUserWithLinks tests need. The
+// shared harness leaves SQLite FK enforcement off, but these tests exercise
+// FK-sensitive deletion paths (link_shares.shared_by has no ON DELETE action),
+// so the pool is pinned to a single connection with foreign_keys=ON — the same
+// enforcement Postgres and MySQL apply unconditionally.
+func newDeleteTestEnv(t *testing.T) (*sqlx.DB, *store.UserStore, *store.LinkStore) {
+	t.Helper()
+	db := testutil.NewTestDB(t)
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+	owns := store.NewOwnershipStore(db)
+	tags := store.NewTagStore(db)
+	return db, store.NewUserStore(db), store.NewLinkStore(db, owns, tags)
+}
+
+func countRows(t *testing.T, db *sqlx.DB, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := db.Get(&n, db.Rebind(query), args...); err != nil {
+		t.Fatalf("count query %q: %v", query, err)
+	}
+	return n
+}
+
+// Reassign mode where the admin is already a non-primary co-owner of a link
+// the target primarily owns. The ownership transfer previously collided with
+// the (link_id, user_id) primary key and rolled back the whole deletion.
+func TestDeleteUserWithLinks_ReassignAdminAlreadyCoOwner(t *testing.T) {
+	db, us, ls := newDeleteTestEnv(t)
+	ctx := context.Background()
+
+	target, err := us.Upsert(ctx, "test", "target", "target@example.com", "Target User", "")
+	if err != nil {
+		t.Fatalf("upsert target: %v", err)
+	}
+	admin, err := us.Upsert(ctx, "test", "admin", "admin@example.com", "Admin User", "admin")
+	if err != nil {
+		t.Fatalf("upsert admin: %v", err)
+	}
+
+	link, err := ls.Create(ctx, "shared-link", "https://example.com", target.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := ls.AddOwner(ctx, link.ID, admin.ID); err != nil {
+		t.Fatalf("add admin co-owner: %v", err)
+	}
+
+	if err := us.DeleteUserWithLinks(ctx, target.ID, admin.ID, "reassign"); err != nil {
+		t.Fatalf("DeleteUserWithLinks reassign: %v", err)
+	}
+
+	if n := countRows(t, db, `SELECT COUNT(*) FROM link_owners WHERE link_id = ?`, link.ID); n != 1 {
+		t.Errorf("link_owners rows for link = %d, want 1", n)
+	}
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_owners WHERE link_id = ? AND user_id = ? AND is_primary = 1`,
+		link.ID, admin.ID); n != 1 {
+		t.Errorf("admin primary ownership rows = %d, want 1", n)
+	}
+	if _, err := us.GetByID(ctx, target.ID); err == nil {
+		t.Error("target user still exists after deletion")
+	}
+}
+
+// Reassign mode where the target shared a link with a third user. The
+// link_shares.shared_by FK previously blocked the user delete on
+// Postgres/MySQL; the share must survive, reattributed to the admin.
+func TestDeleteUserWithLinks_ReassignSharesCreatedByTarget(t *testing.T) {
+	db, us, ls := newDeleteTestEnv(t)
+	ctx := context.Background()
+
+	target, err := us.Upsert(ctx, "test", "target", "target@example.com", "Target User", "")
+	if err != nil {
+		t.Fatalf("upsert target: %v", err)
+	}
+	admin, err := us.Upsert(ctx, "test", "admin", "admin@example.com", "Admin User", "admin")
+	if err != nil {
+		t.Fatalf("upsert admin: %v", err)
+	}
+	recipient, err := us.Upsert(ctx, "test", "recipient", "recipient@example.com", "Recipient User", "")
+	if err != nil {
+		t.Fatalf("upsert recipient: %v", err)
+	}
+
+	link, err := ls.Create(ctx, "shared-link", "https://example.com", target.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := ls.AddShare(ctx, link.ID, recipient.ID, target.ID); err != nil {
+		t.Fatalf("add share: %v", err)
+	}
+
+	if err := us.DeleteUserWithLinks(ctx, target.ID, admin.ID, "reassign"); err != nil {
+		t.Fatalf("DeleteUserWithLinks reassign: %v", err)
+	}
+
+	if n := countRows(t, db, `SELECT COUNT(*) FROM link_shares WHERE shared_by = ?`, target.ID); n != 0 {
+		t.Errorf("link_shares rows with shared_by=target = %d, want 0", n)
+	}
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_shares WHERE link_id = ? AND user_id = ? AND shared_by = ?`,
+		link.ID, recipient.ID, admin.ID); n != 1 {
+		t.Errorf("recipient share reattributed to admin: rows = %d, want 1", n)
+	}
+	if _, err := us.GetByID(ctx, target.ID); err == nil {
+		t.Error("target user still exists after deletion")
+	}
+}
+
+// Reassign mode where the target had shared the link with the admin. The
+// reattribution would produce a self-share on a link the admin now owns;
+// that redundant row must be cleaned up.
+func TestDeleteUserWithLinks_ReassignShareToAdminCleaned(t *testing.T) {
+	db, us, ls := newDeleteTestEnv(t)
+	ctx := context.Background()
+
+	target, err := us.Upsert(ctx, "test", "target", "target@example.com", "Target User", "")
+	if err != nil {
+		t.Fatalf("upsert target: %v", err)
+	}
+	admin, err := us.Upsert(ctx, "test", "admin", "admin@example.com", "Admin User", "admin")
+	if err != nil {
+		t.Fatalf("upsert admin: %v", err)
+	}
+
+	link, err := ls.Create(ctx, "shared-link", "https://example.com", target.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := ls.AddShare(ctx, link.ID, admin.ID, target.ID); err != nil {
+		t.Fatalf("add share to admin: %v", err)
+	}
+
+	if err := us.DeleteUserWithLinks(ctx, target.ID, admin.ID, "reassign"); err != nil {
+		t.Fatalf("DeleteUserWithLinks reassign: %v", err)
+	}
+
+	if n := countRows(t, db, `SELECT COUNT(*) FROM link_shares WHERE link_id = ?`, link.ID); n != 0 {
+		t.Errorf("link_shares rows for reassigned link = %d, want 0 (self-share cleaned)", n)
+	}
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_owners WHERE link_id = ? AND user_id = ? AND is_primary = 1`,
+		link.ID, admin.ID); n != 1 {
+		t.Errorf("admin primary ownership rows = %d, want 1", n)
+	}
+}
+
+// Reassign mode where the target shared with the admin a link the admin
+// also co-owns (another user primary). After reattribution the self-share is
+// redundant — the admin's co-owner row already grants access — so it must be
+// cleaned up even though the admin is not the primary owner.
+func TestDeleteUserWithLinks_ReassignShareToAdminOnCoOwnedLink(t *testing.T) {
+	db, us, ls := newDeleteTestEnv(t)
+	ctx := context.Background()
+
+	owner, err := us.Upsert(ctx, "test", "owner", "owner@example.com", "Owner User", "")
+	if err != nil {
+		t.Fatalf("upsert owner: %v", err)
+	}
+	target, err := us.Upsert(ctx, "test", "target", "target@example.com", "Target User", "")
+	if err != nil {
+		t.Fatalf("upsert target: %v", err)
+	}
+	admin, err := us.Upsert(ctx, "test", "admin", "admin@example.com", "Admin User", "admin")
+	if err != nil {
+		t.Fatalf("upsert admin: %v", err)
+	}
+
+	link, err := ls.Create(ctx, "co-owned-link", "https://example.com", owner.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := ls.AddOwner(ctx, link.ID, target.ID); err != nil {
+		t.Fatalf("add target co-owner: %v", err)
+	}
+	if err := ls.AddOwner(ctx, link.ID, admin.ID); err != nil {
+		t.Fatalf("add admin co-owner: %v", err)
+	}
+	if err := ls.AddShare(ctx, link.ID, admin.ID, target.ID); err != nil {
+		t.Fatalf("add share to admin: %v", err)
+	}
+
+	if err := us.DeleteUserWithLinks(ctx, target.ID, admin.ID, "reassign"); err != nil {
+		t.Fatalf("DeleteUserWithLinks reassign: %v", err)
+	}
+
+	if n := countRows(t, db, `SELECT COUNT(*) FROM link_shares WHERE link_id = ?`, link.ID); n != 0 {
+		t.Errorf("link_shares rows for co-owned link = %d, want 0 (redundant self-share cleaned)", n)
+	}
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_owners WHERE link_id = ? AND user_id = ? AND is_primary = 0`,
+		link.ID, admin.ID); n != 1 {
+		t.Errorf("admin co-owner rows = %d, want 1 (must survive)", n)
+	}
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_owners WHERE link_id = ? AND user_id = ? AND is_primary = 1`,
+		link.ID, owner.ID); n != 1 {
+		t.Errorf("original primary owner rows = %d, want 1", n)
+	}
+}
+
+// Reassign mode where the target shared with the admin a link the admin does
+// not own in any capacity. The reattributed self-share row must be KEPT: it is
+// the admin's only access to the link, so deleting it would revoke access.
+// The "shared by you" attribution that results is an accepted cosmetic quirk.
+func TestDeleteUserWithLinks_ReassignShareToAdminKeptWhenNotOwner(t *testing.T) {
+	db, us, ls := newDeleteTestEnv(t)
+	ctx := context.Background()
+
+	owner, err := us.Upsert(ctx, "test", "owner", "owner@example.com", "Owner User", "")
+	if err != nil {
+		t.Fatalf("upsert owner: %v", err)
+	}
+	target, err := us.Upsert(ctx, "test", "target", "target@example.com", "Target User", "")
+	if err != nil {
+		t.Fatalf("upsert target: %v", err)
+	}
+	admin, err := us.Upsert(ctx, "test", "admin", "admin@example.com", "Admin User", "admin")
+	if err != nil {
+		t.Fatalf("upsert admin: %v", err)
+	}
+
+	link, err := ls.Create(ctx, "not-admins-link", "https://example.com", owner.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := ls.AddOwner(ctx, link.ID, target.ID); err != nil {
+		t.Fatalf("add target co-owner: %v", err)
+	}
+	if err := ls.AddShare(ctx, link.ID, admin.ID, target.ID); err != nil {
+		t.Fatalf("add share to admin: %v", err)
+	}
+
+	if err := us.DeleteUserWithLinks(ctx, target.ID, admin.ID, "reassign"); err != nil {
+		t.Fatalf("DeleteUserWithLinks reassign: %v", err)
+	}
+
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_shares WHERE link_id = ? AND user_id = ? AND shared_by = ?`,
+		link.ID, admin.ID, admin.ID); n != 1 {
+		t.Errorf("admin share rows = %d, want 1 (only access to the link, must be kept)", n)
+	}
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_owners WHERE link_id = ? AND user_id = ?`,
+		link.ID, admin.ID); n != 0 {
+		t.Errorf("admin link_owners rows = %d, want 0", n)
+	}
+	if _, err := us.GetByID(ctx, target.ID); err == nil {
+		t.Error("target user still exists after deletion")
+	}
+}
+
+// Delete mode where the target created a share on a link they merely
+// co-owned. The link survives with its primary owner, so the share previously
+// kept a dangling shared_by reference that blocked the user delete.
+func TestDeleteUserWithLinks_DeleteModeShareOnCoOwnedLink(t *testing.T) {
+	db, us, ls := newDeleteTestEnv(t)
+	ctx := context.Background()
+
+	owner, err := us.Upsert(ctx, "test", "owner", "owner@example.com", "Owner User", "")
+	if err != nil {
+		t.Fatalf("upsert owner: %v", err)
+	}
+	target, err := us.Upsert(ctx, "test", "target", "target@example.com", "Target User", "")
+	if err != nil {
+		t.Fatalf("upsert target: %v", err)
+	}
+	admin, err := us.Upsert(ctx, "test", "admin", "admin@example.com", "Admin User", "admin")
+	if err != nil {
+		t.Fatalf("upsert admin: %v", err)
+	}
+	recipient, err := us.Upsert(ctx, "test", "recipient", "recipient@example.com", "Recipient User", "")
+	if err != nil {
+		t.Fatalf("upsert recipient: %v", err)
+	}
+
+	link, err := ls.Create(ctx, "co-owned-link", "https://example.com", owner.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := ls.AddOwner(ctx, link.ID, target.ID); err != nil {
+		t.Fatalf("add target co-owner: %v", err)
+	}
+	if err := ls.AddShare(ctx, link.ID, recipient.ID, target.ID); err != nil {
+		t.Fatalf("add share: %v", err)
+	}
+
+	if err := us.DeleteUserWithLinks(ctx, target.ID, admin.ID, "delete"); err != nil {
+		t.Fatalf("DeleteUserWithLinks delete: %v", err)
+	}
+
+	if _, err := ls.GetByID(ctx, link.ID); err != nil {
+		t.Errorf("co-owned link should survive: %v", err)
+	}
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_owners WHERE link_id = ? AND user_id = ? AND is_primary = 1`,
+		link.ID, owner.ID); n != 1 {
+		t.Errorf("owner primary ownership rows = %d, want 1", n)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM link_owners WHERE user_id = ?`, target.ID); n != 0 {
+		t.Errorf("link_owners rows for target = %d, want 0", n)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM link_shares WHERE shared_by = ?`, target.ID); n != 0 {
+		t.Errorf("link_shares rows with shared_by=target = %d, want 0", n)
+	}
+	if _, err := us.GetByID(ctx, target.ID); err == nil {
+		t.Error("target user still exists after deletion")
+	}
+}
+
+// Delete mode where the target is sole primary owner: the link and its shares
+// go away with the user.
+func TestDeleteUserWithLinks_DeleteModeSolePrimary(t *testing.T) {
+	db, us, ls := newDeleteTestEnv(t)
+	ctx := context.Background()
+
+	target, err := us.Upsert(ctx, "test", "target", "target@example.com", "Target User", "")
+	if err != nil {
+		t.Fatalf("upsert target: %v", err)
+	}
+	admin, err := us.Upsert(ctx, "test", "admin", "admin@example.com", "Admin User", "admin")
+	if err != nil {
+		t.Fatalf("upsert admin: %v", err)
+	}
+	recipient, err := us.Upsert(ctx, "test", "recipient", "recipient@example.com", "Recipient User", "")
+	if err != nil {
+		t.Fatalf("upsert recipient: %v", err)
+	}
+
+	link, err := ls.Create(ctx, "doomed-link", "https://example.com", target.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := ls.AddShare(ctx, link.ID, recipient.ID, target.ID); err != nil {
+		t.Fatalf("add share: %v", err)
+	}
+
+	if err := us.DeleteUserWithLinks(ctx, target.ID, admin.ID, "delete"); err != nil {
+		t.Fatalf("DeleteUserWithLinks delete: %v", err)
+	}
+
+	if _, err := ls.GetByID(ctx, link.ID); err == nil {
+		t.Error("sole-primary link should be deleted")
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM link_shares WHERE link_id = ?`, link.ID); n != 0 {
+		t.Errorf("link_shares rows for deleted link = %d, want 0", n)
+	}
+	if _, err := us.GetByID(ctx, target.ID); err == nil {
+		t.Error("target user still exists after deletion")
+	}
+}
+
+// Plain reassign with no shares and no co-ownership overlap — the path that
+// already worked must keep working.
+func TestDeleteUserWithLinks_ReassignPlain(t *testing.T) {
+	db, us, ls := newDeleteTestEnv(t)
+	ctx := context.Background()
+
+	target, err := us.Upsert(ctx, "test", "target", "target@example.com", "Target User", "")
+	if err != nil {
+		t.Fatalf("upsert target: %v", err)
+	}
+	admin, err := us.Upsert(ctx, "test", "admin", "admin@example.com", "Admin User", "admin")
+	if err != nil {
+		t.Fatalf("upsert admin: %v", err)
+	}
+
+	link, err := ls.Create(ctx, "plain-link", "https://example.com", target.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	if err := us.DeleteUserWithLinks(ctx, target.ID, admin.ID, "reassign"); err != nil {
+		t.Fatalf("DeleteUserWithLinks reassign: %v", err)
+	}
+
+	if n := countRows(t, db,
+		`SELECT COUNT(*) FROM link_owners WHERE link_id = ? AND user_id = ? AND is_primary = 1`,
+		link.ID, admin.ID); n != 1 {
+		t.Errorf("admin primary ownership rows = %d, want 1", n)
+	}
+	if _, err := us.GetByID(ctx, target.ID); err == nil {
+		t.Error("target user still exists after deletion")
 	}
 }

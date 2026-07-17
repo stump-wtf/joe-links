@@ -241,8 +241,12 @@ func (s *UserStore) CountPrimaryLinks(ctx context.Context, userID string) (int, 
 }
 
 // DeleteUserWithLinks deletes a user and handles their links according to linkAction.
-// linkAction "reassign": transfers primary ownership to adminID, removes co-ownership rows.
-// linkAction "delete": deletes links where user is sole primary owner, removes co-ownership rows.
+// linkAction "reassign": transfers primary ownership to adminID, reassigns shares the
+// user created to adminID, removes co-ownership rows.
+// linkAction "delete": deletes links where user is sole primary owner, deletes shares
+// the user created, removes co-ownership rows.
+// Shares the user created must be reassigned or deleted here because
+// link_shares.shared_by references users(id) with no ON DELETE action.
 // The user record deletion cascades to api_tokens, sessions, and link_owners via FK constraints.
 // Governing: SPEC-0011 REQ "Admin User Deletion with Link Handling", REQ "Admin User Deletion Endpoint", ADR-0005
 func (s *UserStore) DeleteUserWithLinks(ctx context.Context, targetID, adminID, linkAction string) error {
@@ -254,10 +258,46 @@ func (s *UserStore) DeleteUserWithLinks(ctx context.Context, targetID, adminID, 
 
 	switch linkAction {
 	case "reassign":
+		// Drop the admin's pre-existing co-owner rows on the target's primary
+		// links so the ownership transfer below cannot collide with the
+		// (link_id, user_id) primary key. The derived table avoids MySQL
+		// error 1093 (same-table DELETE with subquery).
+		_, err = tx.ExecContext(ctx, tx.Rebind(`
+			DELETE FROM link_owners WHERE user_id = ? AND link_id IN (
+				SELECT link_id FROM (
+					SELECT link_id FROM link_owners
+					WHERE user_id = ? AND is_primary = 1
+				) AS t
+			)`), adminID, targetID)
+		if err != nil {
+			return err
+		}
 		// Transfer primary ownership to admin
 		_, err = tx.ExecContext(ctx,
 			tx.Rebind(`UPDATE link_owners SET user_id = ? WHERE user_id = ? AND is_primary = 1`),
 			adminID, targetID)
+		if err != nil {
+			return err
+		}
+		// Reattribute shares the target created to the admin so recipients
+		// keep their access. shared_by is not part of the (link_id, user_id)
+		// primary key, so this cannot collide.
+		_, err = tx.ExecContext(ctx,
+			tx.Rebind(`UPDATE link_shares SET shared_by = ? WHERE shared_by = ?`),
+			adminID, targetID)
+		if err != nil {
+			return err
+		}
+		// The reattribution can turn a share the target granted to the admin
+		// into a self-share. Where the admin holds any link_owners row the
+		// share is redundant (ownership already grants access), so drop it.
+		// A self-share on a link the admin does not own at all is kept
+		// intentionally: the share is the admin's only access to that link,
+		// at the cost of a cosmetic "shared by you" attribution.
+		_, err = tx.ExecContext(ctx, tx.Rebind(`
+			DELETE FROM link_shares WHERE user_id = ? AND shared_by = ? AND link_id IN (
+				SELECT link_id FROM link_owners WHERE user_id = ?
+			)`), adminID, adminID, adminID)
 		if err != nil {
 			return err
 		}
@@ -268,6 +308,14 @@ func (s *UserStore) DeleteUserWithLinks(ctx context.Context, targetID, adminID, 
 				SELECT link_id FROM link_owners
 				WHERE user_id = ? AND is_primary = 1
 			)`), targetID)
+		if err != nil {
+			return err
+		}
+		// Shares on the deleted links cascade via link_id. Shares the target
+		// created on surviving links (co-owned, another user primary) must be
+		// removed explicitly.
+		_, err = tx.ExecContext(ctx,
+			tx.Rebind(`DELETE FROM link_shares WHERE shared_by = ?`), targetID)
 		if err != nil {
 			return err
 		}
