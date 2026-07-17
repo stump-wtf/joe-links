@@ -441,3 +441,58 @@ func TestLinks_Create_TagWriteFailure_NoHalfCreatedLink(t *testing.T) {
 		t.Errorf("GetBySlug after failed create = %v, want ErrNotFound (no half-created resource)", err)
 	}
 }
+
+// Reserved-slug convergence (#204): the API uses the same exact-match store
+// rule as the form and live checker — every reserved word is rejected with
+// INVALID_SLUG, and dash-prefixed slugs like "u-foo" are accepted.
+// Governing: SPEC-0005 REQ "Links Collection"
+func TestLinks_Create_ReservedSlugs_Rejected(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "alice@example.com", "user")
+	token := seedToken(t, env, user.ID)
+
+	for _, slug := range store.ReservedSlugs() {
+		body := `{"slug":"` + slug + `","url":"https://example.com"}`
+		req := httptest.NewRequest("POST", "/links", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		authRequest(req, token)
+		rec := httptest.NewRecorder()
+		env.Router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST /links slug=%q: status = %d, want %d; body: %s", slug, rec.Code, http.StatusBadRequest, rec.Body.String())
+			continue
+		}
+		var resp struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Errorf("slug=%q decode: %v", slug, err)
+			continue
+		}
+		if resp.Code != "INVALID_SLUG" {
+			t.Errorf("slug=%q code = %q, want INVALID_SLUG", slug, resp.Code)
+		}
+	}
+}
+
+func TestLinks_Create_DashPrefixedSlug_Accepted(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "alice@example.com", "user")
+	token := seedToken(t, env, user.ID)
+
+	body := `{"slug":"u-foo","url":"https://example.com/u-foo"}`
+	req := httptest.NewRequest("POST", "/links", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	authRequest(req, token)
+	rec := httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if _, err := env.LinkStore.GetBySlug(context.Background(), "u-foo"); err != nil {
+		t.Errorf("GetBySlug(u-foo) = %v, want link", err)
+	}
+}

@@ -304,6 +304,17 @@ func TestCreateLinkDefaultsAndSharing(t *testing.T) {
 		}
 	})
 
+	// Reserved-slug convergence (#204): reservation is exact-match only, so a
+	// dash-prefixed slug like "u-foo" passes the shared store rule here too.
+	t.Run("dash-prefixed slug allowed", func(t *testing.T) {
+		resp := callTool(t, env, token, "create_link", map[string]any{
+			"slug": "u-foo", "url": "https://example.com/u-foo",
+		})
+		if resp.IsError {
+			t.Fatalf("create u-foo: unexpected error %s %s", resp.ErrCode, resp.ErrMessage)
+		}
+	})
+
 	// Governing: SPEC-0018 REQ "Observability" — scenario: Tool call metrics
 	t.Run("metrics counted", func(t *testing.T) {
 		if got := testutil.ToFloat64(metrics.MCPToolCallsTotal.WithLabelValues("create_link", "success")); got < 2 {

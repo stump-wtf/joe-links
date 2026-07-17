@@ -74,7 +74,7 @@ All configuration uses environment variables prefixed with `JOE_`. You can also 
 
 Slugs must match the pattern `[a-z0-9][a-z0-9-]*[a-z0-9]` (minimum 2 characters). They are globally unique and case-insensitive.
 
-**Reserved prefixes** (cannot be used as slugs): `auth`, `static`, `dashboard`, `admin`
+**Reserved slugs** (exact match only — cannot be used as slugs, but dash-prefixed variants like `u-foo` are fine): `admin`, `api`, `auth`, `dashboard`, `links`, `mcp`, `metrics`, `static`, `u`
 
 ## API
 

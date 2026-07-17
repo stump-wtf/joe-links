@@ -37,14 +37,23 @@ func TestValidateSlugFormat(t *testing.T) {
 		{name: "contains period", slug: "my.link", wantErr: ErrSlugInvalid},
 		{name: "contains slash", slug: "my/link", wantErr: ErrSlugInvalid},
 
-		// Reserved slugs
+		// Reserved slugs — every routed prefix, exact match (issue #204)
 		{name: "reserved auth", slug: "auth", wantErr: ErrSlugReserved},
 		{name: "reserved static", slug: "static", wantErr: ErrSlugReserved},
 		{name: "reserved dashboard", slug: "dashboard", wantErr: ErrSlugReserved},
 		{name: "reserved admin", slug: "admin", wantErr: ErrSlugReserved},
-		{name: "reserved links", slug: "links", wantErr: ErrSlugReserved}, // Governing: SPEC-0012 REQ "Public Link Browser Route Priority"
+		{name: "reserved api", slug: "api", wantErr: ErrSlugReserved},         // Governing: SPEC-0005 REQ "API Router Mounting"
+		{name: "reserved u", slug: "u", wantErr: ErrSlugReserved},             // Governing: SPEC-0012 REQ "User Profile Route Priority"
+		{name: "reserved links", slug: "links", wantErr: ErrSlugReserved},     // Governing: SPEC-0012 REQ "Public Link Browser Route Priority"
+		{name: "reserved metrics", slug: "metrics", wantErr: ErrSlugReserved}, // Governing: SPEC-0016 REQ "Prometheus Metrics Endpoint"
+		{name: "reserved mcp", slug: "mcp", wantErr: ErrSlugReserved},         // Governing: SPEC-0018 REQ "MCP Endpoint"
 
-		// Not reserved (substrings of reserved words are fine)
+		// Not reserved: reservation is exact-match only — routes are
+		// path-segmented, so dash-prefixed slugs create no conflict (#204).
+		{name: "u-foo not reserved", slug: "u-foo", wantErr: nil},
+		{name: "links-roundup not reserved", slug: "links-roundup", wantErr: nil},
+		{name: "api-test not reserved", slug: "api-test", wantErr: nil},
+		{name: "mcp-notes not reserved", slug: "mcp-notes", wantErr: nil},
 		{name: "auth-settings not reserved", slug: "auth-settings", wantErr: nil},
 		{name: "myadmin not reserved", slug: "myadmin", wantErr: nil},
 	}
@@ -66,6 +75,38 @@ func TestValidateSlugFormat(t *testing.T) {
 				t.Errorf("ValidateSlugFormat(%q) = %v, want error wrapping %v", tt.slug, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestReservedSlugs_AllRejected asserts every exported reserved slug is
+// rejected by the single validation entry point. The set's correspondence to
+// the actual route table is pinned by
+// handler.TestReservedSlugs_CoverEveryTopLevelRoute, which derives the routes
+// from the real router rather than a second hand-maintained list (#204).
+func TestReservedSlugs_AllRejected(t *testing.T) {
+	got := ReservedSlugs()
+	if len(got) == 0 {
+		t.Fatal("ReservedSlugs() is empty")
+	}
+	for _, slug := range got {
+		if err := ValidateSlugFormat(slug); !errors.Is(err, ErrSlugReserved) {
+			t.Errorf("ValidateSlugFormat(%q) = %v, want ErrSlugReserved", slug, err)
+		}
+	}
+}
+
+// TestValidateSlugFormat_ReservedMessageNamesFullSet guards the user-facing
+// message: it is derived from the reserved set, so it must name every
+// reserved word and cannot drift from the rule (#204).
+func TestValidateSlugFormat_ReservedMessageNamesFullSet(t *testing.T) {
+	err := ValidateSlugFormat("mcp")
+	if err == nil {
+		t.Fatal("ValidateSlugFormat(\"mcp\") = nil, want ErrSlugReserved")
+	}
+	for _, slug := range ReservedSlugs() {
+		if !strings.Contains(err.Error(), slug) {
+			t.Errorf("reserved error %q does not name reserved slug %q", err.Error(), slug)
+		}
 	}
 }
 

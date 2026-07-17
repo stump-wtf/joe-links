@@ -15,21 +15,6 @@ import (
 	"github.com/joestump/joe-links/internal/store"
 )
 
-// Governing: SPEC-0001 REQ "Short Link Resolution" — reserved prefixes MUST NOT be valid slugs.
-// Governing: SPEC-0012 REQ "User Profile Route Priority" — "u" reserved for user profile pages.
-// Governing: SPEC-0012 REQ "Public Link Browser Route Priority" — "links" reserved for public link browser.
-var reservedPrefixes = []string{"auth", "static", "dashboard", "admin", "u", "links"}
-
-// isReservedSlug returns true if the slug matches or starts with a reserved prefix.
-func isReservedSlug(slug string) bool {
-	for _, prefix := range reservedPrefixes {
-		if slug == prefix || strings.HasPrefix(slug, prefix+"-") {
-			return true
-		}
-	}
-	return false
-}
-
 // LinkForm holds form input values for creating or editing a link.
 // Governing: SPEC-0010 REQ "Visibility Selector in Link Forms"
 type LinkForm struct {
@@ -148,18 +133,13 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Slug format and reserved-word checks share the store's single source of
+	// truth (store.ValidateSlugFormat) with the REST API, MCP tools, and the
+	// live availability checker; the reserved error names the full set (#204).
+	// Governing: SPEC-0001 REQ "Short Link Resolution" — reserved routes MUST NOT be valid slugs
 	// Governing: SPEC-0013 REQ "Create/Edit Link Form as HTMX Modal" — validation errors re-render inside modal
 	if err := store.ValidateSlugFormat(form.Slug); err != nil {
 		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Form: form, Error: err.Error()}
-		if isHTMX(r) {
-			renderFragment(w, "new_link_modal", data)
-			return
-		}
-		render(w, "new.html", data)
-		return
-	}
-	if isReservedSlug(form.Slug) {
-		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Form: form, Error: "That slug uses a reserved prefix (auth, static, dashboard, admin, links)."}
 		if isHTMX(r) {
 			renderFragment(w, "new_link_modal", data)
 			return

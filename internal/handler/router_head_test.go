@@ -9,9 +9,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/alexedwards/scs/v2"
+	"github.com/go-chi/chi/v5"
 
 	"github.com/joestump/joe-links/internal/auth"
 	"github.com/joestump/joe-links/internal/store"
@@ -156,5 +158,53 @@ func TestRouter_HeadUnknownSlug404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("HEAD /no-such-slug status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+// TestReservedSlugs_CoverEveryTopLevelRoute derives the route table from the
+// REAL router (chi.Walk over NewRouter) instead of a hand-maintained list, so
+// adding a top-level route without reserving its first segment fails here —
+// the drift mechanism issue #204 killed cannot re-enter via this test.
+// Governing: SPEC-0002 — reserved slugs shadow no registered route.
+func TestReservedSlugs_CoverEveryTopLevelRoute(t *testing.T) {
+	router, _ := newRouterTestEnv(t)
+
+	chiRouter, ok := router.(chi.Routes)
+	if !ok {
+		t.Fatalf("NewRouter no longer returns a chi.Routes; rework this test")
+	}
+
+	routeSegments := map[string]bool{}
+	err := chi.Walk(chiRouter, func(method, route string, h http.Handler, mw ...func(http.Handler) http.Handler) error {
+		seg := strings.TrimPrefix(route, "/")
+		if i := strings.IndexByte(seg, '/'); i >= 0 {
+			seg = seg[:i]
+		}
+		// Skip the root route and the parameterized catch-all — only static
+		// top-level segments need reservation.
+		if seg == "" || seg == "*" || strings.HasPrefix(seg, "{") {
+			return nil
+		}
+		routeSegments[seg] = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk router: %v", err)
+	}
+
+	reserved := map[string]bool{}
+	for _, s := range store.ReservedSlugs() {
+		reserved[s] = true
+	}
+
+	for seg := range routeSegments {
+		if !reserved[seg] {
+			t.Errorf("top-level route segment %q is not in store.ReservedSlugs() — a user could own the slug and shadow-confuse the route", seg)
+		}
+	}
+	for slug := range reserved {
+		if !routeSegments[slug] {
+			t.Errorf("reserved slug %q matches no registered top-level route — stale reservation", slug)
+		}
 	}
 }

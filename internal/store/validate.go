@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -47,18 +49,44 @@ var (
 	// Governing: SPEC-0009 REQ "Variable Placeholder Syntax", ADR-0013
 	VarPlaceholderRe = regexp.MustCompile(`\$[a-z][a-z0-9_]*`)
 
+	// reservedSlugs is the single source of truth for slugs that collide with
+	// application routes. Reservation is exact-match only: routes are
+	// path-segmented (/u/{...} and /u-foo are distinct), so dash-prefixed
+	// slugs like "u-foo" or "links-roundup" are valid (issue #204).
+	// Every entry must correspond to a top-level route in internal/handler/router.go.
+	// Governing: SPEC-0001 REQ "Short Link Resolution" — reserved routes MUST NOT be valid slugs
 	reservedSlugs = map[string]bool{
-		"auth":      true,
-		"static":    true,
-		"dashboard": true,
-		"admin":     true,
-		"api":       true, // Governing: SPEC-0005 REQ "API Router Mounting" — shadows /api/v1/* routes
-		"u":         true,
+		"auth":      true, // Governing: SPEC-0004 REQ "Route Registration and Priority"
+		"static":    true, // Governing: SPEC-0004 REQ "Route Registration and Priority"
+		"dashboard": true, // Governing: SPEC-0004 REQ "Route Registration and Priority"
+		"admin":     true, // Governing: SPEC-0004 REQ "Route Registration and Priority"
+		"api":       true, // Governing: SPEC-0005 REQ "API Router Mounting" — shadows /api/v1/* and /api/docs/* routes
+		"u":         true, // Governing: SPEC-0012 REQ "User Profile Route Priority"
 		"links":     true, // Governing: SPEC-0012 REQ "Public Link Browser Route Priority"
 		"metrics":   true, // Governing: SPEC-0016 REQ "Prometheus Metrics Endpoint", ADR-0016
 		"mcp":       true, // Governing: SPEC-0018 REQ "MCP Endpoint", ADR-0018
 	}
+
+	// reservedSlugList is the sorted form of reservedSlugs, used to derive
+	// user-facing messages so they can never drift from the actual set.
+	reservedSlugList = func() []string {
+		out := make([]string, 0, len(reservedSlugs))
+		for s := range reservedSlugs {
+			out = append(out, s)
+		}
+		sort.Strings(out)
+		return out
+	}()
 )
+
+// ReservedSlugs returns the sorted list of slugs reserved for application
+// routes. Callers must not mutate the returned slice's source; a fresh copy
+// is returned on each call.
+func ReservedSlugs() []string {
+	out := make([]string, len(reservedSlugList))
+	copy(out, reservedSlugList)
+	return out
+}
 
 // ValidateSlugFormat checks that slug conforms to the required format and is
 // not reserved. It does NOT check uniqueness — that is handled at the database
@@ -68,7 +96,9 @@ func ValidateSlugFormat(slug string) error {
 		return ErrSlugInvalid
 	}
 	if reservedSlugs[slug] {
-		return fmt.Errorf("%w: %q", ErrSlugReserved, slug)
+		// Name the full reserved set in the message, derived from the map so
+		// user-facing errors can never drift from the actual rule (issue #204).
+		return fmt.Errorf("%w: %q (reserved: %s)", ErrSlugReserved, slug, strings.Join(reservedSlugList, ", "))
 	}
 	return nil
 }

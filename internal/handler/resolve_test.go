@@ -7,11 +7,13 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jmoiron/sqlx"
 	"github.com/joestump/joe-links/internal/store"
 	"github.com/joestump/joe-links/internal/testutil"
 )
 
 type resolveTestEnv struct {
+	db     *sqlx.DB
 	ls     *store.LinkStore
 	ks     *store.KeywordStore
 	rh     *ResolveHandler
@@ -35,7 +37,7 @@ func newResolveTestEnv(t *testing.T) *resolveTestEnv {
 	}
 
 	rh := NewResolveHandler(ls, ks, owns, nil)
-	return &resolveTestEnv{ls: ls, ks: ks, rh: rh, userID: u.ID}
+	return &resolveTestEnv{db: db, ls: ls, ks: ks, rh: rh, userID: u.ID}
 }
 
 // seedLink creates a link with the given slug and URL.
@@ -44,6 +46,19 @@ func (e *resolveTestEnv) seedLink(t *testing.T, slug, url string) {
 	_, err := e.ls.Create(context.Background(), slug, url, e.userID, "", "", "")
 	if err != nil {
 		t.Fatalf("seed link %q: %v", slug, err)
+	}
+}
+
+// seedRawLink inserts a link row directly, bypassing store validation — for
+// slugs no creation surface allows (e.g. multi-segment legacy/imported rows)
+// whose resolution behavior SPEC-0009 still defines.
+func (e *resolveTestEnv) seedRawLink(t *testing.T, slug, url string) {
+	t.Helper()
+	id := slug + "-raw-id"
+	_, err := e.db.Exec(e.db.Rebind(
+		`INSERT INTO links (id, slug, url, title, description, visibility) VALUES (?, ?, ?, '', '', 'public')`), id, slug, url)
+	if err != nil {
+		t.Fatalf("seed raw link %q: %v", slug, err)
 	}
 }
 
@@ -98,7 +113,7 @@ func TestResolve_StaticLink(t *testing.T) {
 func TestResolve_ExactMatchPriority(t *testing.T) {
 	env := newResolveTestEnv(t)
 	env.seedLink(t, "github", "https://github.com/$username")
-	env.seedLink(t, "github/joestump", "https://joestump.dev")
+	env.seedRawLink(t, "github/joestump", "https://joestump.dev")
 
 	w := env.resolve(t, "/github/joestump")
 	if w.Code != http.StatusFound {

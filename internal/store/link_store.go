@@ -64,6 +64,12 @@ func (s *LinkStore) Create(ctx context.Context, slug, url, ownerID, title, descr
 	if err := ValidateLinkText(title, description); err != nil {
 		return nil, err
 	}
+	// Belt-and-braces: handlers validate first, but the store is the single
+	// source of truth for slug format + reservation (#204) — a future direct
+	// caller must not be able to bypass it.
+	if err := ValidateSlugFormat(slug); err != nil {
+		return nil, err
+	}
 	if visibility == "" {
 		visibility = "public"
 	}
@@ -110,6 +116,12 @@ func (s *LinkStore) Create(ctx context.Context, slug, url, ownerID, title, descr
 func (s *LinkStore) CreateFull(ctx context.Context, slug, url, ownerID, title, description, visibility string, tagNames, shareUserIDs []string, sharedBy string) (*Link, error) {
 	// Governing: SPEC-0002 REQ "Links Table" — reject over-length title/description before insert
 	if err := ValidateLinkText(title, description); err != nil {
+		return nil, err
+	}
+	// Belt-and-braces: handlers validate first, but the store is the single
+	// source of truth for slug format + reservation (#204) — a future direct
+	// caller must not be able to bypass it.
+	if err := ValidateSlugFormat(slug); err != nil {
 		return nil, err
 	}
 	if visibility == "" {
