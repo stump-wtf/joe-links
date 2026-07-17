@@ -29,13 +29,26 @@ docker compose up -d
 # Visit http://localhost:8080
 ```
 
+The app inside the container always listens on port 8080. To publish it on a
+different host port, set `JOE_HOST_PORT` in `.env` (e.g. `JOE_HOST_PORT=9000`
+serves http://localhost:9000) -- do not set `JOE_HTTP_ADDR` for Docker
+deployments; compose pins it to `:8080` inside the container.
+
+The container runs as a non-root user (`joe`, uid 65532). If you are upgrading
+a deployment whose data volume was created by an older root-run image, fix the
+volume ownership once:
+
+```bash
+docker compose exec -u root app chown -R joe:joe /data
+```
+
 ## Configuration
 
 All configuration uses environment variables prefixed with `JOE_`. You can also use a `joe-links.yaml` config file.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `JOE_HTTP_ADDR` | `:8080` | HTTP bind address |
+| `JOE_HTTP_ADDR` | `:8080` | HTTP bind address (under docker-compose this is pinned to `:8080`; use `JOE_HOST_PORT` in `.env` to change the published host port) |
 | `JOE_DB_DRIVER` | -- | Database driver: `sqlite3`, `mysql`, or `postgres` |
 | `JOE_DB_DSN` | -- | Database connection string |
 | `JOE_OIDC_ISSUER` | -- | OIDC provider discovery URL |

@@ -1,0 +1,51 @@
+# Keep the build context (and cache keys) down to what the image needs:
+# Go sources (incl. docs/swagger, imported by the binary), web/ + static/
+# for the embedded assets and Tailwind build, and package*.json/tailwind
+# config for the CSS builder stage.
+
+# VCS and CI
+.git
+.github
+
+# Agent/tooling metadata
+.claude
+.claudeignore
+.claude-plugin-design.json
+.design-docs.json
+
+# Node dependencies (each build stage runs npm ci itself)
+node_modules
+**/node_modules
+
+# Docs that the binary does not embed (docs/swagger stays in)
+docs-site
+docs/adrs
+docs/openspec
+
+# Integrations (browser/Safari extensions — not part of the server image)
+integrations
+safari-extension
+
+# Local dev, databases, secrets
+dev
+bin
+dist
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+.env
+joe-links.yaml
+
+# Docker files themselves (changing them must not bust COPY cache)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Misc artifacts
+*.png
+*.zip
+README.md
+PRIVACY.md
+LICENSE
+Makefile
