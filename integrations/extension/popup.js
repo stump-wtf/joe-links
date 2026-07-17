@@ -27,14 +27,22 @@ function makeCopyBtn(text) {
 }
 
 // Try to extract a slug from a tab URL given a keyword URL template.
-// Template may contain a single $varname placeholder (e.g. "https://github.com/$user").
-// Returns the extracted slug or null if the URL doesn't match the template prefix.
+// Templates contain a {slug} placeholder (e.g. "https://jira.example.com/browse/{slug}");
+// the server validates its presence (internal/handler/keywords.go). Matches the template
+// prefix, strips any query/fragment, and strips the template's path suffix if it has one.
+// Returns the extracted slug or null if the URL doesn't match.
 function matchKeywordTemplate(tabURL, urlTemplate) {
-  if (!urlTemplate || !urlTemplate.includes('$')) return null;
-  const varIdx = urlTemplate.indexOf('$');
-  const prefix = urlTemplate.slice(0, varIdx);
+  if (!urlTemplate) return null;
+  const idx = urlTemplate.indexOf('{slug}');
+  if (idx === -1) return null;
+  const prefix = urlTemplate.slice(0, idx);
+  const suffix = urlTemplate.slice(idx + '{slug}'.length).split('?')[0].split('#')[0];
   if (!tabURL.startsWith(prefix)) return null;
-  const slug = tabURL.slice(prefix.length).split('?')[0].split('#')[0];
+  let slug = tabURL.slice(prefix.length).split('?')[0].split('#')[0];
+  if (suffix) {
+    if (!slug.endsWith(suffix)) return null;
+    slug = slug.slice(0, -suffix.length);
+  }
   return slug || null;
 }
 
@@ -331,10 +339,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (slug) suggestions.push({ keyword: tpl.keyword, slug });
       }
       if (suggestions.length > 0) {
-        renderKeywordSuggestions(suggestions);
+        renderKeywordSuggestions(suggestions, baseURL);
         // Pre-fill the slug field with the first suggestion's slug if it's empty.
+        // Template matches preserve case and can span path segments ("PROJ-123",
+        // "a/b"), but the create form's slug must satisfy the server's slug rules
+        // ([a-z0-9][a-z0-9-]*[a-z0-9]) — lowercase first, and skip the pre-fill
+        // entirely if the value still wouldn't pass, so we never pre-fill a slug
+        // the server would reject. The keyword suggestion rows above keep the
+        // original case because template substitution is case-preserving.
         const slugInput = document.getElementById('slug');
-        if (!slugInput.value) slugInput.value = suggestions[0].slug;
+        const prefill = suggestions[0].slug.toLowerCase();
+        if (!slugInput.value && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(prefill)) {
+          slugInput.value = prefill;
+        }
       }
     }
   }
@@ -372,7 +389,8 @@ function renderExistingLinks(links, serverKeyword, baseURL) {
 
     row.appendChild(span);
     row.appendChild(editBtn);
-    row.appendChild(makeCopyBtn(short));
+    // Copy the full URL — bare "go/slug" only works for recipients who also run the extension.
+    row.appendChild(makeCopyBtn(`${baseURL}/${link.slug}`));
     section.appendChild(row);
   }
 
@@ -380,7 +398,7 @@ function renderExistingLinks(links, serverKeyword, baseURL) {
 }
 
 // Render the "Keyword shortcuts" section for matching keyword templates.
-function renderKeywordSuggestions(suggestions) {
+function renderKeywordSuggestions(suggestions, baseURL) {
   const container = document.getElementById('keyword-suggestions');
   const section = document.createElement('div');
   section.className = 'kw-section';
@@ -400,7 +418,8 @@ function renderKeywordSuggestions(suggestions) {
     span.textContent = short;
 
     row.appendChild(span);
-    row.appendChild(makeCopyBtn(short));
+    // Copy the full path-routed URL — the server resolves /{keyword}/{slug} for everyone.
+    row.appendChild(makeCopyBtn(`${baseURL}/${keyword}/${slug}`));
     section.appendChild(row);
   }
 
@@ -443,8 +462,10 @@ document.getElementById('create').addEventListener('click', async () => {
 
   const title       = document.getElementById('title').value.trim();
   const description = document.getElementById('description').value.trim();
+  // Governing: SPEC-0010 REQ "REST API Visibility Field" — defaults to "public"
+  const visibility  = document.getElementById('visibility').value;
 
-  const body = { url, slug };
+  const body = { url, slug, visibility };
   if (title)            body.title       = title;
   if (description)      body.description = description;
   if (tagList.length)   body.tags        = [...tagList];
@@ -461,18 +482,21 @@ document.getElementById('create').addEventListener('click', async () => {
     if (res.ok) {
       const data     = await res.json();
       const linkSlug = data.slug || slug;
-      // Display and copy the short form: serverKeyword/slug (e.g. "go/my-link")
+      // Display the short form (e.g. "go/my-link") but copy the full URL — the bare
+      // short form only resolves for recipients who also run the extension.
       const shortLink = `${serverKeyword}/${linkSlug}`;
+      const fullLink  = `${baseURL}/${linkSlug}`;
 
-      // Auto-copy short link to clipboard.
+      // Auto-copy full link to clipboard.
       // Governing: SPEC-0008 REQ "Browser Action — Create Link" scenario "successful link creation"
-      const copied = await navigator.clipboard.writeText(shortLink).then(() => true).catch(() => false);
+      const copied = await navigator.clipboard.writeText(fullLink).then(() => true).catch(() => false);
 
-      showSuccess(shortLink, copied);
+      showSuccess(shortLink, fullLink, copied);
       slugInput.value = '';
-      // Clear tags after successful creation.
+      // Clear tags and reset visibility after successful creation.
       tagList.length = 0;
       document.querySelectorAll('.tag-pill').forEach(p => p.remove());
+      document.getElementById('visibility').value = 'public';
     } else {
       const errData = await res.json().catch(() => ({}));
       const msg = errData.error || errData.message || `Error ${res.status}`;
@@ -493,7 +517,7 @@ function clearStatus() {
   el.style.display = 'none';
 }
 
-function showSuccess(shortLink, copied = false) {
+function showSuccess(shortLink, fullLink, copied = false) {
   const el  = document.getElementById('status');
   const box = document.createElement('div');
   box.className = 'status-box success';
@@ -510,7 +534,7 @@ function showSuccess(shortLink, copied = false) {
   link.textContent = shortLink;
 
   row.appendChild(link);
-  row.appendChild(makeCopyBtn(shortLink));
+  row.appendChild(makeCopyBtn(fullLink));
   box.appendChild(label);
   box.appendChild(row);
   el.appendChild(box);

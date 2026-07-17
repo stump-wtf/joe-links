@@ -3,13 +3,15 @@
 
 // Known search engines and their query parameter names.
 // Governing: SPEC-0008 REQ "Search Interception and Redirect"
+// Google serves country domains (google.co.uk, google.de, google.com.au, …).
+const GOOGLE_HOST_RE = /^(www\.)?google\.([a-z]{2,3})(\.[a-z]{2})?$/;
 function getSearchQuery(url) {
   const h = url.hostname;
   const p = url.pathname;
   const s = url.searchParams;
-  if ((h === 'www.google.com' || h === 'google.com') && p === '/search') return s.get('q');
-  if (h === 'www.bing.com' && p === '/search') return s.get('q');
-  if (h === 'duckduckgo.com' && p === '/') return s.get('q');
+  if (GOOGLE_HOST_RE.test(h) && p === '/search') return s.get('q');
+  if ((h === 'www.bing.com' || h === 'bing.com') && p === '/search') return s.get('q');
+  if ((h === 'duckduckgo.com' || h === 'start.duckduckgo.com') && p === '/') return s.get('q');
   if (h === 'search.yahoo.com' && p.startsWith('/search')) return s.get('p');
   if (h === 'search.brave.com' && p === '/search') return s.get('q');
   if (h === 'www.ecosia.org' && p === '/search') return s.get('q');
@@ -19,9 +21,11 @@ function getSearchQuery(url) {
   return null;
 }
 
-// Pattern: keyword/slug — keyword is alphanumeric+hyphens (case-insensitive), slug is anything.
-// Governing: SPEC-0008 REQ "Search Interception and Redirect"
-const KEYWORD_RE = /^([A-Za-z][A-Za-z0-9-]*)\/(.+)$/;
+// Pattern: keyword/slug — keyword is alphanumeric+hyphens (case-insensitive), slug is any
+// non-whitespace run. Queries containing spaces (e.g. "go/no-go decision matrix") are real
+// searches and must fall through to the search engine.
+// Governing: SPEC-0008 REQ "Search Interception and Redirect", REQ "Fallthrough Safety"
+const KEYWORD_RE = /^([A-Za-z][A-Za-z0-9-]*)\/(\S+)$/;
 
 const DEFAULTS = { baseURL: 'http://go', keywords: ['go'] };
 
@@ -112,14 +116,21 @@ async function updateRedirectRules() {
     const allKeywords = [...new Set([...kws, serverKeyword])].filter(k => k !== serverHost);
 
     // One rule per keyword that differs from the server hostname.
-    // The transform keeps path/query/fragment intact and only swaps host+scheme.
+    // A plain host swap is only correct for the server's own alias; template keywords
+    // need their keyword path segment preserved (http://jira/ABC-123 must become
+    // {baseURL}/jira/ABC-123, not {baseURL}/ABC-123) — mirrors redirectFor() below.
+    // Governing: SPEC-0008 REQ "Search Interception and Redirect"
     const addRules = allKeywords
       .map((keyword, i) => ({
         id: i + 1,
         priority: 1,
         action: {
           type: 'redirect',
-          redirect: { transform: { scheme, host: serverHost } },
+          redirect: {
+            regexSubstitution: keyword === serverKeyword
+              ? `${scheme}://${serverHost}\\1`
+              : `${scheme}://${serverHost}/${keyword}\\1`,
+          },
         },
         condition: {
           regexFilter: `^https?://${keyword.replace(/\./g, '\\.')}(/.*)?$`,
@@ -138,6 +149,8 @@ async function updateRedirectRules() {
 }
 
 // Governing: SPEC-0008 REQ "Keyword Host Discovery", REQ "API Key Authentication"
+// Returns { ok: true } on success or { ok: false, error } so callers (the options
+// page's "Refresh now" and save flows) can surface failures instead of a false success.
 async function refreshKeywords() {
   const { baseURL, apiKey } = await chrome.storage.local.get({ baseURL: DEFAULTS.baseURL, apiKey: '' });
   const headers = {};
@@ -147,9 +160,9 @@ async function refreshKeywords() {
       signal: AbortSignal.timeout(5000),
       headers,
     });
-    if (!res.ok) return;
+    if (!res.ok) return { ok: false, error: `Server returned ${res.status}.` };
     const data = await res.json();
-    if (!Array.isArray(data)) return;
+    if (!Array.isArray(data)) return { ok: false, error: 'Unexpected response from server.' };
     // Always include the canonical hostname and its short first-label alias
     // (e.g. 'go.stump.rocks' and 'go') so declarativeNetRequest rules are
     // created even when no keyword templates are configured on the server.
@@ -157,11 +170,34 @@ async function refreshKeywords() {
     const serverKeyword = canonical.split('.')[0];
     const merged = [...new Set([canonical, serverKeyword, ...data])];
     await chrome.storage.local.set({ keywords: merged });
+    return { ok: true };
   } catch {
-    // Server unreachable — keep existing keyword list; no error surfaced to user.
+    // Server unreachable — keep existing keyword list.
     // Governing: SPEC-0008 REQ "Keyword Host Discovery" scenario "Server is unreachable"
+    return { ok: false, error: 'Could not reach server.' };
   }
 }
+
+// Create the periodic refresh alarm if it doesn't already exist with the right
+// period. Runs on every service-worker start because Firefox drops alarms across
+// browser restarts and a Chrome disable→enable cycle clears them without firing
+// onInstalled or onStartup. The get() guard matters: chrome.alarms.create with an
+// existing name resets its timer, and MV3 workers wake frequently. The period
+// check matters too: Chrome persists alarms across extension updates, so a stale
+// 5-minute alarm created by v1.2.4–v1.2.8 must be replaced, not kept.
+// Governing: SPEC-0008 REQ "Keyword Host Discovery" — default refresh interval is 60 minutes.
+async function ensureKeywordRefreshAlarm() {
+  try {
+    const existing = await chrome.alarms.get('keyword-refresh');
+    if (!existing || existing.periodInMinutes !== 60) {
+      chrome.alarms.create('keyword-refresh', { periodInMinutes: 60 });
+    }
+  } catch {
+    // alarms.get failed (unlikely) — create unconditionally rather than lose the refresh.
+    chrome.alarms.create('keyword-refresh', { periodInMinutes: 60 });
+  }
+}
+ensureKeywordRefreshAlarm();
 
 // Governing: SPEC-0008 REQ "Keyword Host Discovery", REQ "On-Install Setup"
 chrome.runtime.onInstalled.addListener(async (details) => {
@@ -175,14 +211,14 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   await refreshKeywords();
   await updateRedirectRules();
   await setActionIcon();
-  // Governing: SPEC-0008 REQ "Keyword Host Discovery" — default refresh interval is 60 minutes.
-  chrome.alarms.create('keyword-refresh', { periodInMinutes: 60 });
+  await ensureKeywordRefreshAlarm();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await refreshKeywords();
   await updateRedirectRules();
   await setActionIcon();
+  await ensureKeywordRefreshAlarm();
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -193,9 +229,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 // Allow the options page to trigger a keyword refresh after a base URL change.
+// Responds with refreshKeywords()'s { ok, error? } so the page can report failures.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'refresh-keywords') {
-    refreshKeywords().then(() => updateRedirectRules()).then(() => sendResponse({}));
+    refreshKeywords()
+      .then(async (result) => {
+        await updateRedirectRules();
+        sendResponse(result);
+      })
+      .catch(() => sendResponse({ ok: false, error: 'Refresh failed.' }));
     return true; // keep channel open for async response
   }
 });
@@ -239,7 +281,11 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
       const keyword = rawKeyword.toLowerCase();
       // Accept stored keywords OR the server's own short alias (guards against stale storage).
       if (kws.includes(keyword) || keyword === serverKeyword) {
-        chrome.tabs.update(details.tabId, { url: redirectFor(keyword, slug) });
+        // The slug comes from decoded search-query text — percent-encode it (keeping
+        // "/" for multi-segment slugs) so e.g. "go/100%" can't build an invalid URL,
+        // and swallow tabs.update rejections (closed tab, invalid URL).
+        const encoded = encodeURI(slug).replace(/#/g, '%23');
+        Promise.resolve(chrome.tabs.update(details.tabId, { url: redirectFor(keyword, encoded) })).catch(() => {});
         return;
       }
     }
@@ -251,7 +297,9 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   // Also guards against stale storage by accepting serverKeyword directly.
   // Governing: SPEC-0008 REQ "Search Interception and Redirect"
   if ((kws.includes(url.hostname) || url.hostname === serverKeyword) && url.hostname !== serverHost && url.pathname.length > 1) {
-    const slug = url.pathname.slice(1); // strip leading "/"
-    chrome.tabs.update(details.tabId, { url: redirectFor(url.hostname, slug) });
+    // Keep the query string — the declarativeNetRequest path preserves it, so the
+    // fallback must behave identically. pathname/search are already percent-encoded.
+    const slug = url.pathname.slice(1) + url.search; // strip leading "/"
+    Promise.resolve(chrome.tabs.update(details.tabId, { url: redirectFor(url.hostname, slug) })).catch(() => {});
   }
 });

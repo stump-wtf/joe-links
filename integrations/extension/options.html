@@ -139,7 +139,8 @@
     </div>
     <div style="border-top: 1px solid var(--base-300); padding-top: 16px; display: flex; flex-direction: column; gap: 8px;">
       <label>Keywords</label>
-      <p class="hint">Keywords are refreshed automatically every 5 minutes. You can also trigger an immediate refresh.</p>
+      <!-- Governing: SPEC-0008 REQ "Keyword Host Discovery" — default refresh interval is 60 minutes. -->
+      <p class="hint">Keywords are refreshed automatically every 60 minutes. You can also trigger an immediate refresh.</p>
       <div style="display: flex; align-items: center; gap: 10px;">
         <button id="refresh-keywords">Refresh now</button>
         <span id="refresh-status" style="font-size: 0.82rem; color: var(--success-text); display: none;"></span>

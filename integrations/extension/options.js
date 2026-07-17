@@ -56,6 +56,16 @@ function validateURL(value) {
   }
 }
 
+// Show the outcome of a background refresh-keywords request next to the button.
+// Governing: SPEC-0008 REQ "Keyword Host Discovery" — failures must not report success.
+function showRefreshResult(result, ms) {
+  const ok = result?.ok === true;
+  refreshStatus.textContent = ok ? 'Keywords refreshed.' : (result?.error || 'Could not reach server.');
+  refreshStatus.style.color = ok ? 'var(--success-text)' : 'var(--error-text)';
+  refreshStatus.style.display = 'inline';
+  setTimeout(() => { refreshStatus.style.display = 'none'; }, ms);
+}
+
 saveBtn.addEventListener('click', () => {
   const normalized = validateURL(input.value.trim());
 
@@ -75,18 +85,21 @@ saveBtn.addEventListener('click', () => {
     input.value = normalized;
     savedMsg.style.display = 'block';
     setTimeout(() => { savedMsg.style.display = 'none'; }, 3000);
-    // Ask the background service worker to refresh keywords with the new URL.
-    chrome.runtime.sendMessage({ type: 'refresh-keywords' });
+    // Ask the background service worker to refresh keywords with the new URL and
+    // warn if the new server is unreachable (stale keywords/redirect rules stay active).
+    chrome.runtime.sendMessage({ type: 'refresh-keywords' }, (result) => {
+      if (chrome.runtime.lastError) result = { ok: false, error: 'Refresh failed.' };
+      if (!result?.ok) showRefreshResult(result, 5000);
+    });
   });
 });
 
 refreshBtn.addEventListener('click', () => {
   refreshBtn.disabled = true;
   refreshStatus.style.display = 'none';
-  chrome.runtime.sendMessage({ type: 'refresh-keywords' }, () => {
+  chrome.runtime.sendMessage({ type: 'refresh-keywords' }, (result) => {
+    if (chrome.runtime.lastError) result = { ok: false, error: 'Refresh failed.' };
     refreshBtn.disabled = false;
-    refreshStatus.textContent = 'Keywords refreshed.';
-    refreshStatus.style.display = 'inline';
-    setTimeout(() => { refreshStatus.style.display = 'none'; }, 3000);
+    showRefreshResult(result, 3000);
   });
 });
