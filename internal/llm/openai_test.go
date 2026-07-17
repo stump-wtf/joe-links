@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/joestump/joe-links/internal/config"
 )
@@ -88,5 +89,31 @@ func TestOpenAI_MalformedContent_ReturnsRawError(t *testing.T) {
 	}
 	if mre.Raw != raw {
 		t.Errorf("Raw = %q, want %q", mre.Raw, raw)
+	}
+}
+
+// Governing: SPEC-0017 REQ "Suggest API Endpoint" scenario "LLM call fails" (#201)
+// A hung provider must not pin the caller: Suggest must fail with
+// context.DeadlineExceeded once the per-call timeout elapses.
+func TestOpenAI_HungProvider_TimesOut(t *testing.T) {
+	release := make(chan struct{})
+	sg := newOpenAITestSuggester(t, "openai", "sk", func(w http.ResponseWriter, r *http.Request) {
+		<-release // block far longer than the suggester timeout
+	})
+	t.Cleanup(func() { close(release) }) // runs before srv.Close (LIFO)
+	sg.timeout = 50 * time.Millisecond
+
+	start := time.Now()
+	_, err := sg.Suggest(context.Background(), SuggestRequest{URL: "https://example.com"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Suggest took %v; want it bounded by the ~50ms timeout", elapsed)
 	}
 }

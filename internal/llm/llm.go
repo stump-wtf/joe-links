@@ -4,8 +4,19 @@ package llm
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/joestump/joe-links/internal/config"
+)
+
+// Governing: SPEC-0017 REQ "Suggest API Endpoint" scenario "LLM call fails" (#201)
+// Every provider call is bounded so a hung or blackholed provider cannot pin
+// the calling request indefinitely: defaultSuggestTimeout caps a single
+// Suggest call via context deadline, and defaultClientTimeout on the
+// http.Client is defense in depth for contexts without a deadline.
+const (
+	defaultSuggestTimeout = 15 * time.Second
+	defaultClientTimeout  = 30 * time.Second
 )
 
 // SuggestRequest is the input to the Suggester.

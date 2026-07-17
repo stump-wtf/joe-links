@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/joestump/joe-links/internal/config"
 )
@@ -23,6 +24,7 @@ type openaiSuggester struct {
 	model        string
 	baseURL      string
 	promptCustom string
+	timeout      time.Duration // per-Suggest deadline; overridable for testing
 	client       *http.Client
 }
 
@@ -41,7 +43,8 @@ func newOpenAISuggester(cfg *config.Config) *openaiSuggester {
 		model:        model,
 		baseURL:      baseURL,
 		promptCustom: cfg.LLM.Prompt,
-		client:       &http.Client{},
+		timeout:      defaultSuggestTimeout,
+		client:       &http.Client{Timeout: defaultClientTimeout},
 	}
 }
 
@@ -65,6 +68,10 @@ type openaiResponse struct {
 }
 
 func (o *openaiSuggester) Suggest(ctx context.Context, req SuggestRequest) (*SuggestResponse, error) {
+	// Governing: SPEC-0017 REQ "Suggest API Endpoint" scenario "LLM call fails" (#201)
+	ctx, cancel := context.WithTimeout(ctx, o.timeout)
+	defer cancel()
+
 	prompt, err := renderPrompt(o.promptCustom, PromptData(req))
 	if err != nil {
 		return nil, fmt.Errorf("render prompt: %w", err)

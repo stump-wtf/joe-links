@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/joestump/joe-links/internal/config"
 )
@@ -22,7 +23,8 @@ type anthropicSuggester struct {
 	apiKey       string
 	model        string
 	promptCustom string
-	apiURL       string // overridable for testing; defaults to anthropicAPIURL
+	apiURL       string        // overridable for testing; defaults to anthropicAPIURL
+	timeout      time.Duration // per-Suggest deadline; overridable for testing
 	client       *http.Client
 }
 
@@ -36,7 +38,8 @@ func newAnthropicSuggester(cfg *config.Config) *anthropicSuggester {
 		model:        model,
 		promptCustom: cfg.LLM.Prompt,
 		apiURL:       anthropicAPIURL,
-		client:       &http.Client{},
+		timeout:      defaultSuggestTimeout,
+		client:       &http.Client{Timeout: defaultClientTimeout},
 	}
 }
 
@@ -59,6 +62,10 @@ type anthropicResponse struct {
 }
 
 func (a *anthropicSuggester) Suggest(ctx context.Context, req SuggestRequest) (*SuggestResponse, error) {
+	// Governing: SPEC-0017 REQ "Suggest API Endpoint" scenario "LLM call fails" (#201)
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+
 	prompt, err := renderPrompt(a.promptCustom, PromptData(req))
 	if err != nil {
 		return nil, fmt.Errorf("render prompt: %w", err)
