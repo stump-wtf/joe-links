@@ -1031,7 +1031,7 @@ const docTemplate = `{
                         "BearerToken": []
                     }
                 ],
-                "description": "Returns all tags that have at least one associated link.",
+                "description": "Returns tags that have at least one associated link visible to the caller (public, owned, co-owned, or shared). Link counts include only visible links. Admins see all tags with full counts.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1085,7 +1085,7 @@ const docTemplate = `{
                         "BearerToken": []
                     }
                 ],
-                "description": "Returns links with the given tag. Admins see all; non-admins see only owned links.",
+                "description": "Returns links with the given tag. Admins see all; non-admins see only links visible to them (public, owned, co-owned, or shared). Returns 404 when the tag does not exist — or, for non-admins, when it has no visible links.",
                 "consumes": [
                     "application/json"
                 ],

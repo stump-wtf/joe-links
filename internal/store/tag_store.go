@@ -116,7 +116,10 @@ func (s *TagStore) upsertTx(ctx context.Context, tx *sqlx.Tx, name string) (*Tag
 	return &Tag{ID: id, Name: strings.TrimSpace(name), Slug: slug, CreatedAt: now}, nil
 }
 
-// SearchByPrefix returns tags whose name starts with the given prefix (case-insensitive).
+// SearchByPrefix returns tags whose name starts with the given prefix. Case
+// sensitivity of the match follows the driver's LIKE semantics: ASCII
+// case-insensitive on sqlite3 and mysql (default collations), case-sensitive
+// on postgres.
 // Governing: SPEC-0004 REQ "New Link Form" — tag autocomplete
 func (s *TagStore) SearchByPrefix(ctx context.Context, prefix string) ([]*Tag, error) {
 	var tags []*Tag
@@ -124,6 +127,34 @@ func (s *TagStore) SearchByPrefix(ctx context.Context, prefix string) ([]*Tag, e
 	err := s.db.SelectContext(ctx, &tags, s.q(`
 		SELECT * FROM tags WHERE name LIKE ? ORDER BY name ASC LIMIT 10
 	`), pattern)
+	if err != nil {
+		return nil, err
+	}
+	return tags, nil
+}
+
+// SearchByPrefixVisible returns tags whose name starts with the given prefix
+// and that have at least one link visible to userID: public links, links
+// they own or co-own, or links shared with them. Case sensitivity of the
+// prefix match follows the driver's LIKE semantics (see SearchByPrefix). Tags
+// whose links are all invisible to the viewer are omitted, as are tags with
+// no links at all. Pass an empty userID for anonymous viewers (public links
+// only). Admins see everything and should use SearchByPrefix instead.
+// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
+// Governing: SPEC-0004 REQ "New Link Form" — tag autocomplete
+func (s *TagStore) SearchByPrefixVisible(ctx context.Context, prefix, userID string) ([]*Tag, error) {
+	var tags []*Tag
+	pattern := prefix + "%"
+	err := s.db.SelectContext(ctx, &tags, s.q(`
+		SELECT DISTINCT t.* FROM tags t
+		INNER JOIN link_tags lt ON lt.tag_id = t.id
+		INNER JOIN links l ON l.id = lt.link_id
+		LEFT JOIN link_owners lo ON lo.link_id = l.id AND lo.user_id = ?
+		LEFT JOIN link_shares ls ON ls.link_id = l.id AND ls.user_id = ?
+		WHERE t.name LIKE ?
+		  AND (l.visibility = 'public' OR lo.user_id IS NOT NULL OR ls.user_id IS NOT NULL)
+		ORDER BY t.name ASC LIMIT 10
+	`), userID, userID, pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +254,49 @@ func (s *TagStore) ListWithCountsPaginated(ctx context.Context, limit int, curso
 		ORDER BY t.name ASC, t.id ASC
 		LIMIT ?
 	`), cursorName, cursorName, cursorID, limit)
+	return tags, err
+}
+
+// ListWithCountsVisiblePaginated returns tags with ≥1 link visible to userID,
+// with counts restricted to visible links (public, owned/co-owned, or shared
+// with the user), ordered by (name, id) and keyset-paginated. Tags whose links
+// are all invisible to the viewer are omitted. Pass cursorName/cursorID from
+// the last row of the previous page (empty for the first page). Admins see
+// everything and should use ListWithCountsPaginated instead.
+// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
+// Governing: SPEC-0005 REQ "Pagination", SPEC-0004 REQ "Tag Browser"
+func (s *TagStore) ListWithCountsVisiblePaginated(ctx context.Context, userID string, limit int, cursorName, cursorID string) ([]*TagWithCount, error) {
+	var tags []*TagWithCount
+	if cursorName == "" && cursorID == "" {
+		err := s.db.SelectContext(ctx, &tags, s.q(`
+			SELECT t.*, COUNT(DISTINCT lt.link_id) as link_count
+			FROM tags t
+			INNER JOIN link_tags lt ON lt.tag_id = t.id
+			INNER JOIN links l ON l.id = lt.link_id
+			LEFT JOIN link_owners lo ON lo.link_id = l.id AND lo.user_id = ?
+			LEFT JOIN link_shares ls ON ls.link_id = l.id AND ls.user_id = ?
+			WHERE l.visibility = 'public' OR lo.user_id IS NOT NULL OR ls.user_id IS NOT NULL
+			GROUP BY t.id
+			HAVING COUNT(DISTINCT lt.link_id) >= 1
+			ORDER BY t.name ASC, t.id ASC
+			LIMIT ?
+		`), userID, userID, limit)
+		return tags, err
+	}
+	err := s.db.SelectContext(ctx, &tags, s.q(`
+		SELECT t.*, COUNT(DISTINCT lt.link_id) as link_count
+		FROM tags t
+		INNER JOIN link_tags lt ON lt.tag_id = t.id
+		INNER JOIN links l ON l.id = lt.link_id
+		LEFT JOIN link_owners lo ON lo.link_id = l.id AND lo.user_id = ?
+		LEFT JOIN link_shares ls ON ls.link_id = l.id AND ls.user_id = ?
+		WHERE (l.visibility = 'public' OR lo.user_id IS NOT NULL OR ls.user_id IS NOT NULL)
+		  AND (t.name > ? OR (t.name = ? AND t.id > ?))
+		GROUP BY t.id
+		HAVING COUNT(DISTINCT lt.link_id) >= 1
+		ORDER BY t.name ASC, t.id ASC
+		LIMIT ?
+	`), userID, userID, cursorName, cursorName, cursorID, limit)
 	return tags, err
 }
 

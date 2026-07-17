@@ -31,7 +31,7 @@ func registerTagRoutes(r chi.Router, tags *store.TagStore, links *store.LinkStor
 // Governing: SPEC-0005 REQ "Tags" — tags with link_count = 0 MUST NOT appear.
 //
 // @Summary      List tags
-// @Description  Returns all tags that have at least one associated link.
+// @Description  Returns tags that have at least one associated link visible to the caller (public, owned, co-owned, or shared). Link counts include only visible links. Admins see all tags with full counts.
 // @Tags         Tags
 // @Accept       json
 // @Produce      json
@@ -54,7 +54,16 @@ func (h *tagsAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 	cursorName, cursorID := parseCursor(r)
 
 	// Fetch limit+1 to detect whether another page exists.
-	tagsWithCounts, err := h.tags.ListWithCountsPaginated(r.Context(), limit+1, cursorName, cursorID)
+	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering", REQ "Admin Visibility Override"
+	// — non-admins must not enumerate tag names or counts derived from links
+	// invisible to them (issue #244).
+	var tagsWithCounts []*store.TagWithCount
+	var err error
+	if user.IsAdmin() {
+		tagsWithCounts, err = h.tags.ListWithCountsPaginated(r.Context(), limit+1, cursorName, cursorID)
+	} else {
+		tagsWithCounts, err = h.tags.ListWithCountsVisiblePaginated(r.Context(), user.ID, limit+1, cursorName, cursorID)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", "internal_error")
 		return
@@ -82,10 +91,10 @@ func (h *tagsAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // ListLinks returns links tagged with the given slug.
 // GET /api/v1/tags/{slug}/links
-// Governing: SPEC-0005 REQ "Tags" — admin sees all links; non-admin sees only owned links.
+// Governing: SPEC-0005 REQ "Tags" — admin sees all links; non-admin sees only visible links.
 //
 // @Summary      List links by tag
-// @Description  Returns links with the given tag. Admins see all; non-admins see only owned links.
+// @Description  Returns links with the given tag. Admins see all; non-admins see only links visible to them (public, owned, co-owned, or shared). Returns 404 when the tag does not exist — or, for non-admins, when it has no visible links.
 // @Tags         Tags
 // @Accept       json
 // @Produce      json
@@ -105,25 +114,37 @@ func (h *tagsAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 
 	tagSlug := chi.URLParam(r, "slug")
 
-	// Verify the tag exists.
-	_, err := h.tags.GetBySlug(r.Context(), tagSlug)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "tag not found", "not_found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error", "internal_error")
-		return
-	}
-
 	var links []*store.Link
+	var err error
 	if user.IsAdmin() {
+		// Governing: SPEC-0010 REQ "Admin Visibility Override"
+		// Verify the tag exists.
+		_, err = h.tags.GetBySlug(r.Context(), tagSlug)
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tag not found", "not_found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", "internal_error")
+			return
+		}
 		links, err = h.links.ListByTag(r.Context(), tagSlug)
 	} else {
-		links, err = h.links.ListByOwnerAndTag(r.Context(), user.ID, tagSlug)
+		// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — non-admins
+		// see public, owned/co-owned, and shared links only (issue #244).
+		links, err = h.links.ListVisibleByTag(r.Context(), tagSlug, user.ID)
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", "internal_error")
+		return
+	}
+	// A tag whose links are all invisible to the caller must be
+	// indistinguishable from a tag that does not exist: returning 200 with an
+	// empty list would confirm the tag's existence by slug probing (a
+	// tag-existence oracle). Mirrors the dashboard Detail behavior from PR #241.
+	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
+	if !user.IsAdmin() && len(links) == 0 {
+		writeError(w, http.StatusNotFound, "tag not found", "not_found")
 		return
 	}
 

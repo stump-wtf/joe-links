@@ -896,7 +896,9 @@ paths:
     get:
       consumes:
       - application/json
-      description: Returns all tags that have at least one associated link.
+      description: Returns tags that have at least one associated link visible to
+        the caller (public, owned, co-owned, or shared). Link counts include only
+        visible links. Admins see all tags with full counts.
       parameters:
       - description: Max items to return (default 50, max 200)
         in: query
@@ -931,7 +933,8 @@ paths:
       consumes:
       - application/json
       description: Returns links with the given tag. Admins see all; non-admins see
-        only owned links.
+        only links visible to them (public, owned, co-owned, or shared). Returns 404
+        when the tag does not exist — or, for non-admins, when it has no visible links.
       parameters:
       - description: Tag slug
         in: path

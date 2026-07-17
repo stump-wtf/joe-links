@@ -194,6 +194,156 @@ func TestTagStore_ListWithCountsVisible(t *testing.T) {
 	}
 }
 
+// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — tag autocomplete
+// must not suggest tag names that exist only on links invisible to the viewer
+// (issue #245).
+func TestTagStore_SearchByPrefixVisible(t *testing.T) {
+	ts, ls, us := newTagTestEnv(t)
+	ctx := context.Background()
+
+	owner, err := us.Upsert(ctx, "test", "sub-owner", "owner@example.com", "Owner", "")
+	if err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	viewer, err := us.Upsert(ctx, "test", "sub-viewer", "viewer@example.com", "Viewer", "")
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+
+	seed := func(slug, visibility string, tagNames ...string) *store.Link {
+		t.Helper()
+		l, err := ls.Create(ctx, slug, "https://example.com/"+slug, owner.ID, "", "", visibility)
+		if err != nil {
+			t.Fatalf("Create %q: %v", slug, err)
+		}
+		if err := ls.SetTags(ctx, l.ID, tagNames); err != nil {
+			t.Fatalf("SetTags %q: %v", slug, err)
+		}
+		return l
+	}
+	seed("sp-public", "public", "launch-plan")
+	secure := seed("sp-secure", "secure", "layoffs-2026")
+	// An orphan tag (no links) must never be suggested by the visible variant.
+	if _, err := ts.Upsert(ctx, "lavender"); err != nil {
+		t.Fatalf("Upsert orphan: %v", err)
+	}
+
+	names := func(tags []*store.Tag) map[string]bool {
+		m := make(map[string]bool, len(tags))
+		for _, tag := range tags {
+			m[tag.Name] = true
+		}
+		return m
+	}
+
+	// Viewer only sees the tag carried by a public link.
+	got, err := ts.SearchByPrefixVisible(ctx, "la", viewer.ID)
+	if err != nil {
+		t.Fatalf("SearchByPrefixVisible(viewer): %v", err)
+	}
+	if m := names(got); len(m) != 1 || !m["launch-plan"] {
+		t.Fatalf("viewer suggestions = %v, want only launch-plan", m)
+	}
+
+	// Anonymous viewers match public links only.
+	got, err = ts.SearchByPrefixVisible(ctx, "la", "")
+	if err != nil {
+		t.Fatalf("SearchByPrefixVisible(anonymous): %v", err)
+	}
+	if m := names(got); len(m) != 1 || !m["launch-plan"] {
+		t.Fatalf("anonymous suggestions = %v, want only launch-plan", m)
+	}
+
+	// The owner sees their own secure link's tag.
+	got, err = ts.SearchByPrefixVisible(ctx, "la", owner.ID)
+	if err != nil {
+		t.Fatalf("SearchByPrefixVisible(owner): %v", err)
+	}
+	if m := names(got); len(m) != 2 || !m["launch-plan"] || !m["layoffs-2026"] {
+		t.Fatalf("owner suggestions = %v, want launch-plan + layoffs-2026", m)
+	}
+
+	// Sharing the secure link surfaces its tag for the viewer.
+	if err := ls.AddShare(ctx, secure.ID, viewer.ID, owner.ID); err != nil {
+		t.Fatalf("AddShare: %v", err)
+	}
+	got, err = ts.SearchByPrefixVisible(ctx, "la", viewer.ID)
+	if err != nil {
+		t.Fatalf("SearchByPrefixVisible(viewer, shared): %v", err)
+	}
+	if m := names(got); len(m) != 2 || !m["launch-plan"] || !m["layoffs-2026"] {
+		t.Fatalf("viewer suggestions after share = %v, want launch-plan + layoffs-2026", m)
+	}
+}
+
+// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering", SPEC-0005 REQ
+// "Pagination" — the API tag list must filter tags and counts by viewer
+// visibility while preserving keyset pagination (issue #244).
+func TestTagStore_ListWithCountsVisiblePaginated(t *testing.T) {
+	ts, ls, us := newTagTestEnv(t)
+	ctx := context.Background()
+
+	owner, err := us.Upsert(ctx, "test", "sub-owner", "owner@example.com", "Owner", "")
+	if err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	viewer, err := us.Upsert(ctx, "test", "sub-viewer", "viewer@example.com", "Viewer", "")
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+
+	seed := func(slug, visibility string, tagNames ...string) {
+		t.Helper()
+		l, err := ls.Create(ctx, slug, "https://example.com/"+slug, owner.ID, "", "", visibility)
+		if err != nil {
+			t.Fatalf("Create %q: %v", slug, err)
+		}
+		if err := ls.SetTags(ctx, l.ID, tagNames); err != nil {
+			t.Fatalf("SetTags %q: %v", slug, err)
+		}
+	}
+	seed("vp1", "public", "alpha")
+	seed("vp2", "public", "bravo")
+	seed("vp3", "public", "charlie")
+	seed("vs1", "secure", "bravo") // must not inflate bravo's count for the viewer
+	seed("vs2", "secure", "delta") // must never appear for the viewer
+
+	// Page 1 for the viewer.
+	page1, err := ts.ListWithCountsVisiblePaginated(ctx, viewer.ID, 2, "", "")
+	if err != nil {
+		t.Fatalf("page 1: %v", err)
+	}
+	if len(page1) != 2 || page1[0].Name != "alpha" || page1[1].Name != "bravo" {
+		t.Fatalf("page 1 = %+v, want [alpha bravo]", page1)
+	}
+	if page1[1].Count != 1 {
+		t.Errorf("bravo count = %d, want 1 (secure link must not inflate)", page1[1].Count)
+	}
+
+	// Page 2 resumes from the keyset cursor; the secure-only tag never appears.
+	page2, err := ts.ListWithCountsVisiblePaginated(ctx, viewer.ID, 2, page1[1].Name, page1[1].ID)
+	if err != nil {
+		t.Fatalf("page 2: %v", err)
+	}
+	if len(page2) != 1 || page2[0].Name != "charlie" {
+		t.Fatalf("page 2 = %+v, want [charlie]", page2)
+	}
+
+	// The owner sees all four tags with full counts.
+	all, err := ts.ListWithCountsVisiblePaginated(ctx, owner.ID, 10, "", "")
+	if err != nil {
+		t.Fatalf("owner list: %v", err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("owner tag count = %d, want 4", len(all))
+	}
+	for _, tag := range all {
+		if tag.Name == "bravo" && tag.Count != 2 {
+			t.Errorf("owner bravo count = %d, want 2", tag.Count)
+		}
+	}
+}
+
 func TestTagStore_ListWithCounts(t *testing.T) {
 	ts, ls, us := newTagTestEnv(t)
 	ctx := context.Background()

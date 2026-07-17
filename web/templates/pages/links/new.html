@@ -204,6 +204,14 @@ function addTag(name) {
     input.focus();
 }
 
+// Tag names are user data: suggestion buttons carry the name in a
+// data-tag-name attribute and this delegated listener reads it from the DOM,
+// so no inline JS is ever built from tag names (stored XSS, issue #246).
+document.getElementById('tag-suggestions').addEventListener('click', function(e) {
+    var btn = e.target.closest('button[data-tag-name]');
+    if (btn) { addTag(btn.getAttribute('data-tag-name')); }
+});
+
 // Governing: SPEC-0009 REQ "Link Creation and Editing UI", ADR-0013
 function updateVarHint() {
     var input = document.getElementById('url-input');

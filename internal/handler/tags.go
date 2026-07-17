@@ -2,7 +2,7 @@
 package handler
 
 import (
-	"html"
+	"html/template"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -117,23 +117,39 @@ func (h *TagsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	render(w, "tags/detail.html", data)
 }
 
+// tagSuggestionTmpl renders autocomplete entries. Tag names are user data:
+// contextual auto-escaping places the name in a data-tag-name attribute that
+// the page's delegated click listener reads from the DOM, so no inline JS is
+// ever built from tag names. html.EscapeString inside an onclick JS string is
+// bypassable — the browser decodes HTML entities in attribute values before
+// the JS engine parses the handler (stored XSS, issue #246).
+// Governing: SPEC-0004 REQ "New Link Form" — tag autocomplete via HTMX
+var tagSuggestionTmpl = template.Must(template.New("tag_suggestions").Parse(
+	`{{range .}}<li><button type="button" class="btn btn-ghost btn-sm justify-start" data-tag-name="{{.Name}}">{{.Name}}</button></li>{{end}}`))
+
 // Suggest returns tag autocomplete results as HTML options.
 // Governing: SPEC-0004 REQ "New Link Form" — tag autocomplete via HTMX
 func (h *TagsHandler) Suggest(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromContext(r.Context())
 	q := r.URL.Query().Get("q")
 	w.Header().Set("Content-Type", "text/html")
 	if q == "" {
 		_, _ = w.Write([]byte(""))
 		return
 	}
-	tags, err := h.tags.SearchByPrefix(r.Context(), q)
+	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering", REQ "Admin Visibility Override"
+	// — autocomplete must not suggest tag names that exist only on links
+	// invisible to the viewer (issue #245).
+	var tags []*store.Tag
+	var err error
+	if user != nil && user.IsAdmin() {
+		tags, err = h.tags.SearchByPrefix(r.Context(), q)
+	} else {
+		tags, err = h.tags.SearchByPrefixVisible(r.Context(), q, visibleUserID(user))
+	}
 	if err != nil || len(tags) == 0 {
 		_, _ = w.Write([]byte(""))
 		return
 	}
-	var buf []byte
-	for _, t := range tags {
-		buf = append(buf, []byte(`<li><button type="button" class="btn btn-ghost btn-sm justify-start" onclick="addTag('`+html.EscapeString(t.Name)+`')">`+html.EscapeString(t.Name)+`</button></li>`)...)
-	}
-	_, _ = w.Write(buf)
+	_ = tagSuggestionTmpl.Execute(w, tags)
 }

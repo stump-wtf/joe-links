@@ -81,6 +81,7 @@ func (e *tagsTestEnv) get(t *testing.T, path string, user *store.User) *httptest
 		})
 	})
 	r.Get("/dashboard/tags", e.h.Index)
+	r.Get("/dashboard/tags/suggest", e.h.Suggest)
 	r.Get("/dashboard/tags/{slug}", e.h.Detail)
 
 	req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -166,6 +167,63 @@ func TestTagsDetail_AllInvisibleReturns404(t *testing.T) {
 		if w := env.get(t, "/dashboard/tags/layoffs-2026", user); w.Code != http.StatusOK {
 			t.Errorf("%s: status = %d, want %d", name, w.Code, http.StatusOK)
 		}
+	}
+}
+
+// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — tag autocomplete
+// must not suggest tag names that exist only on links invisible to the viewer
+// (issue #245).
+func TestTagsSuggest_VisibilityFiltering(t *testing.T) {
+	env := newTagsTestEnv(t)
+	env.seedTaggedLink(t, "payroll", "secure", "layoffs-2026")
+	env.seedTaggedLink(t, "handbook", "public", "landing")
+
+	// Non-owner and anonymous viewers must not see the secure-only tag.
+	for name, user := range map[string]*store.User{"other user": env.other, "anonymous": nil} {
+		w := env.get(t, "/dashboard/tags/suggest?q=la", user)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want %d", name, w.Code, http.StatusOK)
+		}
+		body := w.Body.String()
+		if strings.Contains(body, "layoffs-2026") {
+			t.Errorf("%s: secure-only tag suggested; body: %s", name, body)
+		}
+		if !strings.Contains(body, "landing") {
+			t.Errorf("%s: public tag missing from suggestions; body: %s", name, body)
+		}
+	}
+
+	// Owner and admin still see the secure link's tag.
+	for name, user := range map[string]*store.User{"owner": env.owner, "admin": env.admin} {
+		w := env.get(t, "/dashboard/tags/suggest?q=la", user)
+		if !strings.Contains(w.Body.String(), "layoffs-2026") {
+			t.Errorf("%s: expected layoffs-2026 in suggestions; body: %s", name, w.Body.String())
+		}
+	}
+}
+
+// The suggest fragment must never place tag names inside inline JS:
+// html.EscapeString inside an onclick attribute is bypassable because the
+// browser decodes HTML entities in attribute values before the JS engine
+// parses the handler (stored XSS, issue #246). Names ride in a data-tag-name
+// attribute consumed by a delegated click listener instead.
+func TestTagsSuggest_NoInlineJSFromTagNames(t *testing.T) {
+	env := newTagsTestEnv(t)
+	env.seedTaggedLink(t, "evil", "public", `x') alert('pwned`)
+
+	w := env.get(t, "/dashboard/tags/suggest?q=x", env.other)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "onclick") {
+		t.Errorf("suggest fragment builds inline JS from tag names: %s", body)
+	}
+	if !strings.Contains(body, `data-tag-name="x&#39;) alert(&#39;pwned"`) {
+		t.Errorf("expected contextually escaped data-tag-name attribute; body: %s", body)
+	}
+	if !strings.Contains(body, "<li><button") {
+		t.Errorf("suggest fragment lost its dropdown structure: %s", body)
 	}
 }
 
