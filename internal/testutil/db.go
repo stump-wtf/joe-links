@@ -17,9 +17,12 @@ func NewTestDB(t *testing.T) *sqlx.DB {
 
 	// Use a file URI with shared cache so all pool connections share the
 	// same in-memory database. Each test gets a unique name to avoid
-	// cross-test interference. The busy_timeout handles lock contention
-	// from async goroutines (e.g. BearerTokenMiddleware.UpdateLastUsed).
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared&_busy_timeout=5000"
+	// cross-test interference. Pragmas use modernc/sqlite's _pragma syntax
+	// (mattn-style "_busy_timeout=5000" is silently ignored by this driver):
+	// busy_timeout handles lock contention from async goroutines (e.g.
+	// BearerTokenMiddleware.UpdateLastUsed) and foreign_keys matches
+	// production (db.New enables it) so FK cascades are enforced in tests.
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 	conn, err := sqlx.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatalf("open in-memory sqlite: %v", err)
