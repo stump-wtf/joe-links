@@ -99,6 +99,8 @@ func (s *UserStore) resolveUniqueSlug(ctx context.Context, displayName, excludeU
 // role is applied on INSERT (new user). For existing users the role column is
 // intentionally not updated here — callers promote via UpdateRole after Upsert
 // so that manual role changes made through the admin UI are preserved across logins.
+// Governing: SPEC-0001 REQ "Local User Records" — "On subsequent logins, the
+// stored role MUST be preserved."
 // Governing: SPEC-0012 REQ "Display Name Slug Derivation and Lookup", ADR-0002
 func (s *UserStore) Upsert(ctx context.Context, provider, subject, email, displayName, role string) (*User, error) {
 	id := uuid.New().String()
@@ -128,10 +130,11 @@ func (s *UserStore) Upsert(ctx context.Context, provider, subject, email, displa
 	// Governing: ADR-0002 (pluggable database drivers)
 	if s.db.DriverName() == "mysql" {
 		if existingID != "" {
+			// role is deliberately absent so the stored role survives re-login.
 			_, err = s.db.ExecContext(ctx, s.q(`
-				UPDATE users SET email = ?, display_name = ?, display_name_slug = ?, role = ?, updated_at = ?
+				UPDATE users SET email = ?, display_name = ?, display_name_slug = ?, updated_at = ?
 				WHERE provider = ? AND subject = ?
-			`), email, displayName, slug, role, now, provider, subject)
+			`), email, displayName, slug, now, provider, subject)
 		} else {
 			_, err = s.db.ExecContext(ctx, s.q(`
 				INSERT INTO users (id, provider, subject, email, display_name, display_name_slug, role, created_at, updated_at)
@@ -139,8 +142,10 @@ func (s *UserStore) Upsert(ctx context.Context, provider, subject, email, displa
 			`), id, provider, subject, email, displayName, slug, role, now, now)
 		}
 	} else {
-		// SQLite and PostgreSQL: atomic upsert.
-		// Role is included in the UPDATE so admin assignment via email/group is enforced on every login.
+		// SQLite and PostgreSQL: atomic upsert. role is deliberately absent
+		// from the DO UPDATE set list so the stored role survives re-login;
+		// env-driven admin grants are applied by the auth callback via
+		// UpdateRole (promote-only).
 		_, err = s.db.ExecContext(ctx, s.q(`
 			INSERT INTO users (id, provider, subject, email, display_name, display_name_slug, role, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -148,7 +153,6 @@ func (s *UserStore) Upsert(ctx context.Context, provider, subject, email, displa
 				email = excluded.email,
 				display_name = excluded.display_name,
 				display_name_slug = excluded.display_name_slug,
-				role = excluded.role,
 				updated_at = excluded.updated_at
 		`), id, provider, subject, email, displayName, slug, role, now, now)
 	}

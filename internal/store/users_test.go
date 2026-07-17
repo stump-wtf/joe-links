@@ -537,3 +537,79 @@ func TestDeleteUserWithLinks_ReassignPlain(t *testing.T) {
 		t.Error("target user still exists after deletion")
 	}
 }
+
+// The exact regression from issue #192: an admin promotes a user through the
+// admin UI (UpdateRole), the user logs in again (Upsert with the recomputed
+// "user" role), and the promotion must survive.
+// Governing: SPEC-0001 REQ "Local User Records" — "On subsequent logins, the
+// stored role MUST be preserved."
+func TestUpsert_PreservesRoleOnRelogin(t *testing.T) {
+	us := newUserStore(t)
+	ctx := context.Background()
+
+	u, err := us.Upsert(ctx, "test", "bob", "bob@example.com", "Bob Jones", "user")
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if u.Role != "user" {
+		t.Fatalf("initial role = %q, want %q", u.Role, "user")
+	}
+
+	// Admin promotes Bob through the admin UI.
+	promoted, err := us.UpdateRole(ctx, u.ID, "admin")
+	if err != nil {
+		t.Fatalf("UpdateRole: %v", err)
+	}
+	if promoted.Role != "admin" {
+		t.Fatalf("role after UpdateRole = %q, want %q", promoted.Role, "admin")
+	}
+
+	// Bob logs in again: the auth callback recomputes role "user" (he matches
+	// neither JOE_ADMIN_EMAIL nor JOE_OIDC_ADMIN_GROUPS) and calls Upsert.
+	again, err := us.Upsert(ctx, "test", "bob", "bob@example.com", "Bob Jones", "user")
+	if err != nil {
+		t.Fatalf("re-login upsert: %v", err)
+	}
+	if again.Role != "admin" {
+		t.Errorf("role after re-login = %q, want %q (admin promotion must survive Upsert)", again.Role, "admin")
+	}
+
+	// Profile fields must still refresh from OIDC claims on re-login.
+	refreshed, err := us.Upsert(ctx, "test", "bob", "robert@example.com", "Robert Jones", "user")
+	if err != nil {
+		t.Fatalf("re-login upsert with new claims: %v", err)
+	}
+	if refreshed.Email != "robert@example.com" {
+		t.Errorf("email after re-login = %q, want %q", refreshed.Email, "robert@example.com")
+	}
+	if refreshed.DisplayName != "Robert Jones" {
+		t.Errorf("display_name after re-login = %q, want %q", refreshed.DisplayName, "Robert Jones")
+	}
+	if refreshed.Role != "admin" {
+		t.Errorf("role after claim refresh = %q, want %q", refreshed.Role, "admin")
+	}
+}
+
+// New users get the role passed to Upsert (JOE_ADMIN_EMAIL / group grants
+// apply at record creation).
+// Governing: SPEC-0001 REQ "Local User Records"
+func TestUpsert_AppliesRoleOnInsert(t *testing.T) {
+	us := newUserStore(t)
+	ctx := context.Background()
+
+	admin, err := us.Upsert(ctx, "test", "alice", "alice@example.com", "Alice Admin", "admin")
+	if err != nil {
+		t.Fatalf("upsert admin: %v", err)
+	}
+	if admin.Role != "admin" {
+		t.Errorf("new admin-email user role = %q, want %q", admin.Role, "admin")
+	}
+
+	user, err := us.Upsert(ctx, "test", "bob", "bob@example.com", "Bob User", "user")
+	if err != nil {
+		t.Fatalf("upsert user: %v", err)
+	}
+	if user.Role != "user" {
+		t.Errorf("new default user role = %q, want %q", user.Role, "user")
+	}
+}

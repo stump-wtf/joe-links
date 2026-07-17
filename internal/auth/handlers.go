@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strings"
@@ -114,43 +115,27 @@ func (h *Handlers) Callback(w http.ResponseWriter, r *http.Request) {
 	name, _ := rawClaims["name"].(string)
 	subject, _ := rawClaims["sub"].(string)
 
-	// Determine role from adminEmail and OIDC group membership.
-	role := "user"
-	if h.adminEmail != "" && email == h.adminEmail {
-		role = "admin"
-	}
-	if role != "admin" && len(h.adminGroups) > 0 {
-		if groups := rawClaims[h.groupsClaim]; groups != nil {
-			var userGroups []string
-			switch v := groups.(type) {
-			case []interface{}:
-				for _, g := range v {
-					if s, ok := g.(string); ok {
-						userGroups = append(userGroups, s)
-					}
-				}
-			case []string:
-				userGroups = v
-			}
-			adminSet := make(map[string]struct{}, len(h.adminGroups))
-			for _, g := range h.adminGroups {
-				adminSet[g] = struct{}{}
-			}
-			for _, g := range userGroups {
-				if _, ok := adminSet[g]; ok {
-					role = "admin"
-					break
-				}
-			}
-		}
-	}
+	// Determine the env-granted role from adminEmail and OIDC group membership.
+	role := h.computeRole(email, rawClaims)
 
-	// Upsert user record — role is enforced on every login.
+	// Upsert user record. role applies on INSERT only; for existing users the
+	// stored role is preserved so manual promotions made through the admin UI
+	// survive re-login, and env config can only promote (applyRoleGrant below).
+	// Governing: SPEC-0001 REQ "Local User Records" — "On subsequent logins,
+	// the stored role MUST be preserved."
 	user, err := h.users.Upsert(r.Context(), idToken.Issuer, subject, email, name, role)
 	if err != nil {
 		log.Printf("auth callback: upsert user (issuer=%s subject=%s email=%s): %v", idToken.Issuer, subject, email, err)
 		http.Error(w, "user record error", http.StatusInternalServerError)
 		return
+	}
+
+	if promoted, err := h.applyRoleGrant(r.Context(), user, role); err != nil {
+		// A failed promotion must not block login; the user keeps their
+		// stored role for this session and the grant retries on next login.
+		log.Printf("auth callback: promote user to admin (id=%s email=%s): %v", user.ID, user.Email, err)
+	} else {
+		user = promoted
 	}
 
 	// Create session
@@ -174,6 +159,59 @@ func (h *Handlers) Callback(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, cookieRedirect)
 
 	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+// computeRole returns the role granted by env-driven admin config: "admin"
+// when email matches adminEmail (JOE_ADMIN_EMAIL) or the OIDC groups claim
+// intersects adminGroups (JOE_OIDC_ADMIN_GROUPS), otherwise "user".
+func (h *Handlers) computeRole(email string, rawClaims map[string]interface{}) string {
+	if h.adminEmail != "" && email == h.adminEmail {
+		return "admin"
+	}
+	if len(h.adminGroups) > 0 {
+		if groups := rawClaims[h.groupsClaim]; groups != nil {
+			var userGroups []string
+			switch v := groups.(type) {
+			case []interface{}:
+				for _, g := range v {
+					if s, ok := g.(string); ok {
+						userGroups = append(userGroups, s)
+					}
+				}
+			case []string:
+				userGroups = v
+			}
+			adminSet := make(map[string]struct{}, len(h.adminGroups))
+			for _, g := range h.adminGroups {
+				adminSet[g] = struct{}{}
+			}
+			for _, g := range userGroups {
+				if _, ok := adminSet[g]; ok {
+					return "admin"
+				}
+			}
+		}
+	}
+	return "user"
+}
+
+// applyRoleGrant promotes user to admin when the env-computed role grants it.
+// Grant-only semantics: JOE_ADMIN_EMAIL / JOE_OIDC_ADMIN_GROUPS can promote a
+// pre-existing user on any login but never demote, so manual promotions made
+// through the admin UI survive subsequent logins. Demotion happens only via
+// the admin UI/API (UserStore.UpdateRole).
+// Governing: SPEC-0001 REQ "Local User Records" — "On subsequent logins, the
+// stored role MUST be preserved."
+func (h *Handlers) applyRoleGrant(ctx context.Context, user *store.User, computed string) (*store.User, error) {
+	if computed != "admin" || user.Role == "admin" {
+		return user, nil
+	}
+	promoted, err := h.users.UpdateRole(ctx, user.ID, "admin")
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("auth callback: promoted user to admin via env-configured admin email/groups (id=%s email=%s)", user.ID, user.Email)
+	return promoted, nil
 }
 
 // Logout destroys the session and redirects to the login page.
