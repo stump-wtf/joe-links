@@ -82,7 +82,10 @@ func (m *BearerTokenMiddleware) Authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// writeUnauthorized writes a 401 JSON response.
+// writeUnauthorized writes a 401 JSON response. The body is hand-written here
+// (auth cannot import api without a cycle), so the code value must stay in the
+// API's UPPER_SNAKE vocabulary — pinned to api.CodeUnauthorized by
+// TestBearerMiddleware401_UsesAPIErrorCodeVocabulary in internal/api (issue #265).
 func writeUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)

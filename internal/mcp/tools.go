@@ -296,10 +296,19 @@ func createLinkTool(deps Deps) sdk.ToolHandlerFor[createLinkIn, *linkPayload] {
 		if err := store.ValidateSlugFormat(in.Slug); err != nil {
 			return errorResult(codeValidation, err.Error()), nil, nil
 		}
+		// Scheme allowlist: only http(s) destinations may be stored (issue #265).
+		if err := store.ValidateLinkURL(in.URL); err != nil {
+			return errorResult(codeValidation, err.Error()), nil, nil
+		}
 		if err := store.ValidateURLVariables(in.URL); err != nil {
 			return errorResult(codeValidation, err.Error()), nil, nil
 		}
 		if err := store.ValidateLinkText(in.Title, in.Description); err != nil {
+			return errorResult(codeValidation, err.Error()), nil, nil
+		}
+		// Tag intake validation: safe charset, bounded length and count, shared
+		// with the REST API and web forms via the store validators (issues #251, #265).
+		if err := store.ValidateTagNames(in.Tags); err != nil {
 			return errorResult(codeValidation, err.Error()), nil, nil
 		}
 
@@ -510,6 +519,10 @@ func updateLinkTool(deps Deps) sdk.ToolHandlerFor[updateLinkIn, *linkPayload] {
 		if strings.TrimSpace(url) == "" {
 			return errorResult(codeValidation, "url cannot be empty"), nil, nil
 		}
+		// Scheme allowlist: only http(s) destinations may be stored (issue #265).
+		if err := store.ValidateLinkURL(url); err != nil {
+			return errorResult(codeValidation, err.Error()), nil, nil
+		}
 		if err := store.ValidateURLVariables(url); err != nil {
 			return errorResult(codeValidation, err.Error()), nil, nil
 		}
@@ -520,24 +533,36 @@ func updateLinkTool(deps Deps) sdk.ToolHandlerFor[updateLinkIn, *linkPayload] {
 			return errorResult(codeValidation, err.Error()), nil, nil
 		}
 
+		// Validate the raw tag list BEFORE the row update so a hostile tag
+		// name cannot leave the link half-updated, and before deduping so the
+		// count cap and empty-entry rejection see the same raw input as
+		// create_link and the REST API (issues #251, #265). The web form
+		// differs by construction: parseTagNames strips empty segments before
+		// validation, so empty entries cannot reach the validator there.
+		// Then dedupe case-insensitively so duplicate spellings cannot roll
+		// the tag write back (tags upsert by derived slug).
+		var tags []string
+		if in.Tags != nil {
+			if err := store.ValidateTagNames(*in.Tags); err != nil {
+				return errorResult(codeValidation, err.Error()), nil, nil
+			}
+			seen := map[string]bool{}
+			for _, tag := range *in.Tags {
+				k := strings.ToLower(strings.TrimSpace(tag))
+				if seen[k] {
+					continue
+				}
+				seen[k] = true
+				tags = append(tags, tag)
+			}
+		}
+
 		updated, err := deps.LinkStore.Update(ctx, link.ID, url, title, description, visibility)
 		if err != nil {
 			return internalError("update link", err), nil, nil
 		}
 
 		if in.Tags != nil {
-			// Dedupe case-insensitively so duplicate spellings cannot roll the
-			// tag write back (tags upsert by derived slug).
-			seen := map[string]bool{}
-			var tags []string
-			for _, tag := range *in.Tags {
-				k := strings.ToLower(strings.TrimSpace(tag))
-				if k == "" || seen[k] {
-					continue
-				}
-				seen[k] = true
-				tags = append(tags, tag)
-			}
 			if err := deps.LinkStore.SetTags(ctx, updated.ID, tags); err != nil {
 				// Mirror REST's TAG_WRITE_FAILED semantics: the link row is
 				// already committed, tags are not; the call is retryable.

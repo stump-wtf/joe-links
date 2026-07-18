@@ -188,6 +188,12 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Scheme allowlist: only http(s) destinations may be stored (issue #265).
+	if err := store.ValidateLinkURL(req.URL); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidURL)
+		return
+	}
+
 	// Governing: SPEC-0009 REQ "Variable Placeholder Syntax", ADR-0013
 	if err := store.ValidateURLVariables(req.URL); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidURL)
@@ -197,6 +203,17 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// Governing: SPEC-0002 REQ "Links Table" — title max 200, description max 2000 characters
 	if err := store.ValidateLinkText(req.Title, req.Description); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidFieldLength)
+		return
+	}
+
+	// Tag intake validation: safe charset, bounded length and count, shared
+	// with the web forms and MCP tools via the store validators (issues #251, #265).
+	if err := store.ValidateTagNames(req.Tags); err != nil {
+		if errors.Is(err, store.ErrTooManyTags) {
+			writeError(w, http.StatusBadRequest, err.Error(), CodeTooManyTags)
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidTagName)
 		return
 	}
 
@@ -346,6 +363,12 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Scheme allowlist: only http(s) destinations may be stored (issue #265).
+	if err := store.ValidateLinkURL(req.URL); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidURL)
+		return
+	}
+
 	// Governing: SPEC-0009 REQ "Variable Placeholder Syntax", ADR-0013
 	if err := store.ValidateURLVariables(req.URL); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidURL)
@@ -355,6 +378,17 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// Governing: SPEC-0002 REQ "Links Table" — title max 200, description max 2000 characters
 	if err := store.ValidateLinkText(req.Title, req.Description); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidFieldLength)
+		return
+	}
+
+	// Tag intake validation before any write, so a hostile tag name cannot
+	// leave the link row updated with its tag update rejected (issues #251, #265).
+	if err := store.ValidateTagNames(req.Tags); err != nil {
+		if errors.Is(err, store.ErrTooManyTags) {
+			writeError(w, http.StatusBadRequest, err.Error(), CodeTooManyTags)
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidTagName)
 		return
 	}
 

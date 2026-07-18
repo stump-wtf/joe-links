@@ -143,6 +143,107 @@ func TestLinksUpdate_DuplicateTagsDeduped(t *testing.T) {
 	}
 }
 
+// Hostile tag names must be rejected at intake with a form error — defense in
+// depth for the stored XSS class fixed at the output layer in #246 (issue #251).
+func TestLinksCreate_HostileTagNameRejected(t *testing.T) {
+	env := newLinkFormEnv(t)
+
+	w := env.submit(t, http.MethodPost, "/dashboard/links", url.Values{
+		"slug": {"evil-tags"},
+		"url":  {"https://example.com"},
+		"tags": {`x');fetch('/evil')//`},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (form re-render)", w.Code, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), "tag names must start with a letter or digit") {
+		t.Errorf("tag validation error missing from body: %s", w.Body.String())
+	}
+	// Nothing was written.
+	if _, err := env.ls.GetBySlug(context.Background(), "evil-tags"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetBySlug after rejected create = %v, want ErrNotFound", err)
+	}
+}
+
+// javascript:/data: URLs must be rejected at intake on the web form —
+// they are stored-XSS primitives on any redirect surface (issue #265).
+func TestLinksCreate_NonHTTPSchemeRejected(t *testing.T) {
+	env := newLinkFormEnv(t)
+
+	for _, badURL := range []string{"javascript:alert(1)", "data:text/html,x"} {
+		w := env.submit(t, http.MethodPost, "/dashboard/links", url.Values{
+			"slug": {"evil-url"},
+			"url":  {badURL},
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want %d (form re-render)", badURL, w.Code, http.StatusOK)
+		}
+		if !strings.Contains(w.Body.String(), "url must start with http") {
+			t.Errorf("%s: scheme error message missing from body: %s", badURL, w.Body.String())
+		}
+		if _, err := env.ls.GetBySlug(context.Background(), "evil-url"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("%s: GetBySlug after rejected create = %v, want ErrNotFound", badURL, err)
+		}
+	}
+}
+
+// Update must reject hostile tag names BEFORE the link row is written, so a
+// bad tag cannot leave the link half-updated (issues #251, #265).
+func TestLinksUpdate_HostileTagNameRejectedBeforeWrite(t *testing.T) {
+	env := newLinkFormEnv(t)
+	link, err := env.ls.Create(context.Background(), "edit-hostile", "https://example.com", env.user.ID, "Old Title", "", "")
+	if err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+
+	w := env.submit(t, http.MethodPut, "/dashboard/links/"+link.ID, url.Values{
+		"url":   {"https://example.com/new"},
+		"title": {"New Title"},
+		"tags":  {`x');fetch('/evil')//`},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (form re-render)", w.Code, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), "tag names must start with a letter or digit") {
+		t.Errorf("tag validation error missing from body: %s", w.Body.String())
+	}
+
+	got, err := env.ls.GetByID(context.Background(), link.ID)
+	if err != nil {
+		t.Fatalf("reload link: %v", err)
+	}
+	if got.URL != "https://example.com" || got.Title != "Old Title" {
+		t.Errorf("link row modified by rejected update: url=%q title=%q", got.URL, got.Title)
+	}
+}
+
+// Update must reject javascript: URLs with a form error (issue #265).
+func TestLinksUpdate_NonHTTPSchemeRejected(t *testing.T) {
+	env := newLinkFormEnv(t)
+	link, err := env.ls.Create(context.Background(), "edit-scheme", "https://example.com", env.user.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+
+	w := env.submit(t, http.MethodPut, "/dashboard/links/"+link.ID, url.Values{
+		"url": {"javascript:alert(1)"},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (form re-render)", w.Code, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), "url must start with http") {
+		t.Errorf("scheme error message missing from body: %s", w.Body.String())
+	}
+
+	got, err := env.ls.GetByID(context.Background(), link.ID)
+	if err != nil {
+		t.Fatalf("reload link: %v", err)
+	}
+	if got.URL != "https://example.com" {
+		t.Errorf("url = %q, want unchanged https://example.com", got.URL)
+	}
+}
+
 // When the tag write fails during update, the edit form re-renders with an
 // error telling the user the tags were not saved (issue #198).
 func TestLinksUpdate_TagWriteFailureRendersFormError(t *testing.T) {

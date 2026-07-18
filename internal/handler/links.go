@@ -148,6 +148,17 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Scheme allowlist: only http(s) destinations may be stored (issue #265).
+	if err := store.ValidateLinkURL(form.URL); err != nil {
+		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Form: form, Error: err.Error()}
+		if isHTMX(r) {
+			renderFragment(w, "new_link_modal", data)
+			return
+		}
+		render(w, "new.html", data)
+		return
+	}
+
 	// Governing: SPEC-0009 REQ "Variable Placeholder Syntax", ADR-0013
 	if err := store.ValidateURLVariables(form.URL); err != nil {
 		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Form: form, Error: err.Error()}
@@ -170,11 +181,23 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tag intake validation: safe charset, bounded length and count, shared
+	// with the REST API and MCP tools via the store validators (issues #251, #265).
+	tagNames := parseTagNames(form.Tags)
+	if err := store.ValidateTagNames(tagNames); err != nil {
+		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Form: form, Error: err.Error()}
+		if isHTMX(r) {
+			renderFragment(w, "new_link_modal", data)
+			return
+		}
+		render(w, "new.html", data)
+		return
+	}
+
 	// Create the link and its tags in a single transaction: a failed tag write
 	// rolls back the link too, so it re-renders the form with an error instead
 	// of silently dropping the tags (issue #198).
 	// Governing: SPEC-0004 REQ "New Link Form" — link+tags create atomically; ADR-0018
-	tagNames := parseTagNames(form.Tags)
 	_, err := h.links.CreateFull(r.Context(), form.Slug, form.URL, user.ID, form.Title, form.Description, form.Visibility, tagNames, nil, "")
 	if err != nil {
 		msg := "Could not create the link. Please try again."
@@ -304,6 +327,17 @@ func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Scheme allowlist: only http(s) destinations may be stored (issue #265).
+	if err := store.ValidateLinkURL(form.URL); err != nil {
+		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: err.Error()}
+		if isHTMX(r) {
+			renderFragment(w, "edit_link_modal", data)
+			return
+		}
+		render(w, "edit.html", data)
+		return
+	}
+
 	// Governing: SPEC-0009 REQ "Variable Placeholder Syntax", ADR-0013
 	if err := store.ValidateURLVariables(form.URL); err != nil {
 		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: err.Error()}
@@ -317,6 +351,19 @@ func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// Governing: SPEC-0002 REQ "Links Table" — title max 200, description max 2000 characters
 	if err := store.ValidateLinkText(form.Title, form.Description); err != nil {
+		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: err.Error()}
+		if isHTMX(r) {
+			renderFragment(w, "edit_link_modal", data)
+			return
+		}
+		render(w, "edit.html", data)
+		return
+	}
+
+	// Tag intake validation before any write, so a hostile tag name cannot
+	// leave the link row updated with its tag update rejected (issues #251, #265).
+	tagNames := parseTagNames(form.Tags)
+	if err := store.ValidateTagNames(tagNames); err != nil {
 		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: err.Error()}
 		if isHTMX(r) {
 			renderFragment(w, "edit_link_modal", data)
@@ -341,7 +388,6 @@ func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// Update tags. A failed tag write must surface to the user, not be
 	// silently discarded (issue #198).
 	// Governing: SPEC-0004 REQ "Edit Link Form"
-	tagNames := parseTagNames(form.Tags)
 	if err := h.links.SetTags(r.Context(), id, tagNames); err != nil {
 		log.Printf("set tags for link %s: %v", id, err)
 		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: "The link was saved, but its tags could not be updated. Please try again."}

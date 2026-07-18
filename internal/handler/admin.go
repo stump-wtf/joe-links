@@ -202,6 +202,11 @@ func (h *AdminHandler) UpdateLink(w http.ResponseWriter, r *http.Request) {
 		h.renderEditRowError(w, r, id, url, title, description, "URL is required.")
 		return
 	}
+	// Scheme allowlist: only http(s) destinations may be stored (issue #265).
+	if err := store.ValidateLinkURL(url); err != nil {
+		h.renderEditRowError(w, r, id, url, title, description, err.Error())
+		return
+	}
 	if err := store.ValidateURLVariables(url); err != nil {
 		h.renderEditRowError(w, r, id, url, title, description, err.Error())
 		return

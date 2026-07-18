@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -290,12 +291,22 @@ func TestCreateLinkDefaultsAndSharing(t *testing.T) {
 	})
 
 	t.Run("validation errors", func(t *testing.T) {
+		// 21 valid names — one over the MaxTagsPerLink cap (issue #265).
+		tooManyTags := make([]string, store.MaxTagsPerLink+1)
+		for i := range tooManyTags {
+			tooManyTags[i] = fmt.Sprintf("tag-%d", i)
+		}
 		for name, args := range map[string]map[string]any{
 			"bad slug":      {"slug": "Bad_Slug", "url": "https://example.com"},
 			"reserved slug": {"slug": "mcp", "url": "https://example.com"},
 			"empty url":     {"slug": "ok-slug", "url": ""},
 			"dup variable":  {"slug": "ok-slug2", "url": "https://x.com/$a/$a"},
 			"bad viz":       {"slug": "ok-slug3", "url": "https://x.com", "visibility": "sneaky"},
+			// Scheme allowlist + tag intake hardening (issues #251, #265).
+			"javascript url": {"slug": "ok-slug4", "url": "javascript:alert(1)"},
+			"data url":       {"slug": "ok-slug5", "url": "data:text/html,x"},
+			"hostile tag":    {"slug": "ok-slug6", "url": "https://example.com", "tags": []string{`x');fetch('/evil')//`}},
+			"too many tags":  {"slug": "ok-slug7", "url": "https://example.com", "tags": tooManyTags},
 		} {
 			resp := callTool(t, env, token, "create_link", args)
 			if !resp.IsError || resp.ErrCode != "validation_failed" {
@@ -661,5 +672,49 @@ func TestListKeywords(t *testing.T) {
 	kws, _ := resp.Structured["keywords"].([]any)
 	if len(kws) != 1 || kws[0] != "jira" {
 		t.Errorf("keywords = %v", kws)
+	}
+}
+
+// update_link must reject non-http(s) URLs and hostile tag names with a
+// validation error, without touching the link row (issues #251, #265).
+func TestUpdateLinkInputHardening(t *testing.T) {
+	env := newFullEnv(t, nil)
+	_, token := seedUserToken(t, env, "agent@example.com")
+
+	created := callTool(t, env, token, "create_link", map[string]any{
+		"slug": "harden-me", "url": "https://example.com", "title": "Keep",
+	})
+	if created.IsError {
+		t.Fatalf("create: %s %s", created.ErrCode, created.ErrMessage)
+	}
+
+	// The tag cap counts raw pre-dedupe entries, matching create_link, the
+	// REST API, and the web form: duplicate spellings must not rescue an
+	// over-cap payload (issue #265).
+	overCapWithDupes := make([]string, store.MaxTagsPerLink+1)
+	for i := range overCapWithDupes {
+		overCapWithDupes[i] = fmt.Sprintf("tag-%d", i)
+	}
+	overCapWithDupes[1] = "Tag-0" // duplicate spelling of tag-0
+
+	for name, args := range map[string]map[string]any{
+		"javascript url":    {"link": "harden-me", "url": "javascript:alert(1)"},
+		"hostile tag":       {"link": "harden-me", "tags": []string{`x');fetch('/evil')//`}},
+		"empty tag entry":   {"link": "harden-me", "tags": []string{""}},
+		"too many raw tags": {"link": "harden-me", "tags": overCapWithDupes},
+	} {
+		resp := callTool(t, env, token, "update_link", args)
+		if !resp.IsError || resp.ErrCode != "validation_failed" {
+			t.Errorf("%s: want validation_failed, got isError=%v code=%s", name, resp.IsError, resp.ErrCode)
+		}
+	}
+
+	// The link row is untouched — validation runs before any write.
+	link, err := env.LinkStore.GetBySlug(context.Background(), "harden-me")
+	if err != nil {
+		t.Fatalf("reload link: %v", err)
+	}
+	if link.URL != "https://example.com" || link.Title != "Keep" {
+		t.Errorf("link modified by rejected update: url=%q title=%q", link.URL, link.Title)
 	}
 }

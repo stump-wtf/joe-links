@@ -15,6 +15,8 @@ const (
 	CodeInvalidURL            = "INVALID_URL"
 	CodeInvalidFieldLength    = "INVALID_FIELD_LENGTH"
 	CodeInvalidVisibility     = "INVALID_VISIBILITY"
+	CodeInvalidTagName        = "INVALID_TAG_NAME"
+	CodeTooManyTags           = "TOO_MANY_TAGS"
 	CodeSlugConflict          = "SLUG_CONFLICT"
 	CodeDBBusy                = "DB_BUSY"
 	CodeTagWriteFailed        = "TAG_WRITE_FAILED"

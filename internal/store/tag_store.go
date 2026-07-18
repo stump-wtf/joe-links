@@ -53,6 +53,12 @@ func DeriveTagSlug(name string) string {
 
 // Upsert creates a tag if it doesn't exist (by slug), or returns the existing one.
 func (s *TagStore) Upsert(ctx context.Context, name string) (*Tag, error) {
+	// Belt-and-braces: handlers validate first, but the upsert pair is the
+	// single choke point every tag write funnels through — a future direct
+	// caller must not be able to persist a hostile display name (issue #251).
+	if err := ValidateTagName(name); err != nil {
+		return nil, err
+	}
 	slug := DeriveTagSlug(name)
 
 	var existing Tag
@@ -86,6 +92,10 @@ func (s *TagStore) Upsert(ctx context.Context, name string) (*Tag, error) {
 
 // upsertTx is the transactional variant used by LinkStore.SetTags.
 func (s *TagStore) upsertTx(ctx context.Context, tx *sqlx.Tx, name string) (*Tag, error) {
+	// Same intake backstop as Upsert (issue #251).
+	if err := ValidateTagName(name); err != nil {
+		return nil, err
+	}
 	slug := DeriveTagSlug(name)
 
 	var existing Tag
@@ -119,13 +129,14 @@ func (s *TagStore) upsertTx(ctx context.Context, tx *sqlx.Tx, name string) (*Tag
 // SearchByPrefix returns tags whose name starts with the given prefix. Case
 // sensitivity of the match follows the driver's LIKE semantics: ASCII
 // case-insensitive on sqlite3 and mysql (default collations), case-sensitive
-// on postgres.
+// on postgres. LIKE metacharacters in the prefix are escaped so user input
+// matches literally (issue #265).
 // Governing: SPEC-0004 REQ "New Link Form" — tag autocomplete
 func (s *TagStore) SearchByPrefix(ctx context.Context, prefix string) ([]*Tag, error) {
 	var tags []*Tag
-	pattern := prefix + "%"
+	pattern := escapeLike(prefix) + "%"
 	err := s.db.SelectContext(ctx, &tags, s.q(`
-		SELECT * FROM tags WHERE name LIKE ? ORDER BY name ASC LIMIT 10
+		SELECT * FROM tags WHERE name LIKE ? ESCAPE '!' ORDER BY name ASC LIMIT 10
 	`), pattern)
 	if err != nil {
 		return nil, err
@@ -144,14 +155,14 @@ func (s *TagStore) SearchByPrefix(ctx context.Context, prefix string) ([]*Tag, e
 // Governing: SPEC-0004 REQ "New Link Form" — tag autocomplete
 func (s *TagStore) SearchByPrefixVisible(ctx context.Context, prefix, userID string) ([]*Tag, error) {
 	var tags []*Tag
-	pattern := prefix + "%"
+	pattern := escapeLike(prefix) + "%"
 	err := s.db.SelectContext(ctx, &tags, s.q(`
 		SELECT DISTINCT t.* FROM tags t
 		INNER JOIN link_tags lt ON lt.tag_id = t.id
 		INNER JOIN links l ON l.id = lt.link_id
 		LEFT JOIN link_owners lo ON lo.link_id = l.id AND lo.user_id = ?
 		LEFT JOIN link_shares ls ON ls.link_id = l.id AND ls.user_id = ?
-		WHERE t.name LIKE ?
+		WHERE t.name LIKE ? ESCAPE '!'
 		  AND (l.visibility = 'public' OR lo.user_id IS NOT NULL OR ls.user_id IS NOT NULL)
 		ORDER BY t.name ASC LIMIT 10
 	`), userID, userID, pattern)

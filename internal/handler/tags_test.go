@@ -6,14 +6,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jmoiron/sqlx"
 	"github.com/joestump/joe-links/internal/auth"
 	"github.com/joestump/joe-links/internal/store"
 	"github.com/joestump/joe-links/internal/testutil"
 )
 
 type tagsTestEnv struct {
+	db    *sqlx.DB
 	ls    *store.LinkStore
 	h     *TagsHandler
 	owner *store.User
@@ -47,12 +50,29 @@ func newTagsTestEnv(t *testing.T) *tagsTestEnv {
 	}
 
 	return &tagsTestEnv{
+		db:    db,
 		ls:    ls,
 		h:     NewTagsHandler(tags, ls, owns, ks),
 		owner: owner,
 		other: other,
 		admin: admin,
 	}
+}
+
+// seedRawTaggedLink creates a link and attaches a tag by raw SQL, bypassing
+// the store's tag-name intake validation (issue #251) — for legacy hostile
+// names persisted before validation existed, whose output-layer rendering must
+// stay inert independently of the intake layer.
+func (e *tagsTestEnv) seedRawTaggedLink(t *testing.T, slug, visibility, tagName string) {
+	t.Helper()
+	l, err := e.ls.Create(context.Background(), slug, "https://internal.example.com/"+slug, e.owner.ID, "", "", visibility)
+	if err != nil {
+		t.Fatalf("seed link %q: %v", slug, err)
+	}
+	tagID := "raw-tag-" + slug
+	e.db.MustExec(e.db.Rebind(`INSERT INTO tags (id, name, slug, created_at) VALUES (?, ?, ?, ?)`),
+		tagID, tagName, store.DeriveTagSlug(tagName), time.Now().UTC())
+	e.db.MustExec(e.db.Rebind(`INSERT INTO link_tags (link_id, tag_id) VALUES (?, ?)`), l.ID, tagID)
 }
 
 // seedTaggedLink creates a link with the given visibility and tags.
@@ -207,9 +227,13 @@ func TestTagsSuggest_VisibilityFiltering(t *testing.T) {
 // browser decodes HTML entities in attribute values before the JS engine
 // parses the handler (stored XSS, issue #246). Names ride in a data-tag-name
 // attribute consumed by a delegated click listener instead.
+//
+// The hostile name is seeded by raw SQL: intake validation now rejects such
+// names on every write path (issue #251), but legacy rows persisted before
+// that are not migrated, so the output layer must stay independently safe.
 func TestTagsSuggest_NoInlineJSFromTagNames(t *testing.T) {
 	env := newTagsTestEnv(t)
-	env.seedTaggedLink(t, "evil", "public", `x') alert('pwned`)
+	env.seedRawTaggedLink(t, "evil", "public", `x') alert('pwned`)
 
 	w := env.get(t, "/dashboard/tags/suggest?q=x", env.other)
 	if w.Code != http.StatusOK {

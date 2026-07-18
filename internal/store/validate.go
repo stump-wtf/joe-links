@@ -4,6 +4,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -15,6 +16,15 @@ import (
 const (
 	MaxTitleLength       = 200
 	MaxDescriptionLength = 2000
+)
+
+// Tag intake limits (issues #251, #265): tag display names are rendered on
+// every tag surface, so they get a safe charset at intake, and each write may
+// attach only a bounded number of tags so a single request cannot fan out into
+// unbounded per-tag DB work.
+const (
+	MaxTagNameLength = 50
+	MaxTagsPerLink   = 20
 )
 
 var (
@@ -43,7 +53,38 @@ var (
 	// Governing: SPEC-0010 REQ "Visibility Column on Links Table"
 	ErrInvalidVisibility = errors.New("visibility must be one of: public, private, secure")
 
+	// ErrURLSchemeInvalid is returned when a link URL does not use the http or
+	// https scheme. javascript:/data:/etc URLs are stored-XSS primitives the
+	// moment any redirect surface hands them to the browser, so they are
+	// rejected at intake on every write path (issue #265).
+	ErrURLSchemeInvalid = errors.New("url must start with http:// or https://")
+
+	// ErrURLHostMissing is returned when a link URL carries an http(s) scheme
+	// but no host component ("http://", "https:", "http:opaque"). Not a
+	// security concern — the scheme allowlist already won — but such a
+	// destination can never resolve, so it is rejected as a typo (PR #280
+	// review follow-up).
+	ErrURLHostMissing = errors.New("url must include a host (e.g. https://example.com)")
+
+	// ErrTagNameInvalid is returned when a tag display name falls outside the
+	// safe charset. Defense in depth for the stored XSS class fixed at the
+	// output layer in issue #246 (issue #251).
+	ErrTagNameInvalid = errors.New("tag names must start with a letter or digit and may contain only letters, digits, spaces, hyphens, and underscores")
+
+	// ErrTagNameTooLong is returned when a tag display name exceeds MaxTagNameLength characters.
+	ErrTagNameTooLong = fmt.Errorf("tag names must be at most %d characters", MaxTagNameLength)
+
+	// ErrTooManyTags is returned when a single write attaches more than MaxTagsPerLink tags.
+	ErrTooManyTags = fmt.Errorf("a link may have at most %d tags", MaxTagsPerLink)
+
 	slugRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$`)
+
+	// tagNameRe is the safe charset for tag display names: must start
+	// alphanumeric, then letters, digits, spaces, hyphens, underscores. ASCII
+	// alphanumerics only, consistent with DeriveTagSlug — a name accepted here
+	// always derives a non-empty slug, so hostile or unroutable
+	// empty-slug tags cannot be created (issue #251).
+	tagNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9 _-]*$`)
 
 	// VarPlaceholderRe matches $varname placeholders in URL templates.
 	// Governing: SPEC-0009 REQ "Variable Placeholder Syntax", ADR-0013
@@ -145,3 +186,73 @@ func ValidateVisibility(v string) error {
 		return ErrInvalidVisibility
 	}
 }
+
+// ValidateLinkURL checks that a link destination URL parses, uses the http or
+// https scheme, and names a host. Everything else — javascript:, data:,
+// vbscript:, scheme-relative //host, or bare paths — is rejected: the
+// resolver, the browser extension, and SPEC-0020's health checker all assume
+// http(s) destinations, and non-http schemes are latent stored-XSS payloads on
+// any HTMX-driven redirect surface (issue #265). Enforced on every write
+// surface; existing rows are not migrated.
+// Governing: SPEC-0002 REQ "Links Table" — url column
+func ValidateLinkURL(rawURL string) error {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ErrURLSchemeInvalid
+	}
+	// url.Parse lowercases the scheme, so this also rejects JaVaScRiPt: forms.
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ErrURLSchemeInvalid
+	}
+	// The scheme alone is not enough: "http://", "https:", and "http:opaque"
+	// all parse with a valid scheme but an empty host and can never resolve.
+	if u.Host == "" {
+		return ErrURLHostMissing
+	}
+	return nil
+}
+
+// ValidateTagName checks a single tag display name (after trimming, matching
+// how the tag store persists names): safe charset, must start alphanumeric,
+// bounded length. Names that would derive an empty slug (e.g. all-symbol or
+// non-ASCII names) are rejected here for free, so no unroutable slug='' tag
+// row can be created (issue #251).
+// Governing: SPEC-0002 REQ "Tags Table" — every stored name derives a non-empty slug
+func ValidateTagName(name string) error {
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) > MaxTagNameLength {
+		return fmt.Errorf("%w: %q", ErrTagNameTooLong, name)
+	}
+	if !tagNameRe.MatchString(name) {
+		return fmt.Errorf("%w: %q", ErrTagNameInvalid, name)
+	}
+	return nil
+}
+
+// ValidateTagNames checks a full tag list as submitted by one write: at most
+// MaxTagsPerLink entries, each passing ValidateTagName (issues #251, #265).
+// Governing: SPEC-0002 REQ "Tags Table"
+func ValidateTagNames(names []string) error {
+	if len(names) > MaxTagsPerLink {
+		return ErrTooManyTags
+	}
+	for _, name := range names {
+		if err := ValidateTagName(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// likeEscaper escapes the LIKE metacharacters % and _ (and the escape
+// character itself) so user-supplied search terms match literally instead of
+// acting as wildcards. Every query using an escaped pattern MUST carry
+// ESCAPE '!'. '!' is used instead of the conventional backslash because
+// backslash is itself an escape character inside MySQL string literals, so a
+// single `... ESCAPE '\'` query text cannot be portable across
+// sqlite3/mysql/postgres (issue #265).
+var likeEscaper = strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
+
+// escapeLike returns s with LIKE metacharacters escaped for use inside a
+// pattern matched with ESCAPE '!'.
+func escapeLike(s string) string { return likeEscaper.Replace(s) }

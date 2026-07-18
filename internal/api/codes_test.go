@@ -1,15 +1,21 @@
 package api_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/joestump/joe-links/internal/api"
+	"github.com/joestump/joe-links/internal/auth"
 )
 
 // upperSnakeRe matches machine-readable error codes: UPPER_SNAKE only.
@@ -107,5 +113,40 @@ func TestErrorCodes_AllWriteErrorCallSitesUseUpperSnakeConstants(t *testing.T) {
 	}
 	if calls == 0 {
 		t.Fatal("no writeError call sites found — test is broken")
+	}
+}
+
+// TestBearerMiddleware401_UsesAPIErrorCodeVocabulary pins the one error body
+// written OUTSIDE the api package: the bearer middleware hand-writes its 401
+// (auth cannot import api without a cycle), so this test keeps its code field
+// inside the UPPER_SNAKE vocabulary and equal to CodeUnauthorized — extending
+// the writeError AST guard's umbrella across the package boundary (issue #265).
+func TestBearerMiddleware401_UsesAPIErrorCodeVocabulary(t *testing.T) {
+	// A request with no Authorization header 401s before the middleware
+	// touches its stores, so nil dependencies are safe here.
+	mw := auth.NewBearerTokenMiddleware(nil, nil)
+	handler := mw.Authenticate(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("next handler must not run without a bearer token")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	var body struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("401 body is not the standard error JSON: %v", err)
+	}
+	if body.Code != api.CodeUnauthorized {
+		t.Errorf("401 code = %q, want api.CodeUnauthorized (%q)", body.Code, api.CodeUnauthorized)
+	}
+	if !upperSnakeRe.MatchString(body.Code) {
+		t.Errorf("401 code %q is not UPPER_SNAKE", body.Code)
 	}
 }

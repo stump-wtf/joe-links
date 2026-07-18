@@ -158,6 +158,134 @@ func TestValidateURLVariables(t *testing.T) {
 	}
 }
 
+// Only http(s) destinations may be stored: javascript:/data:/etc URLs are
+// stored-XSS primitives on any redirect surface (issue #265).
+func TestValidateLinkURL(t *testing.T) {
+	valid := []string{
+		"https://example.com",
+		"http://example.com",
+		"https://example.com/path?q=1#frag",
+		"https://example.com/$user/$repo",       // variable placeholders survive parsing
+		"HTTPS://EXAMPLE.COM",                   // url.Parse lowercases the scheme
+		"  https://example.com  ",               // surrounding whitespace is trimmed
+		"https://bücher.example/straße",         // IDN host + non-ASCII path
+		"https://example.com:8443/path",         // explicit port
+		"http://192.168.4.10:3000/grafana",      // IP literal host + port
+		"https://user:secret@example.com/gated", // userinfo survives parsing
+		"https://example.com/a b/c",             // legacy shape: unencoded space in path
+	}
+	for _, u := range valid {
+		if err := ValidateLinkURL(u); err != nil {
+			t.Errorf("ValidateLinkURL(%q) = %v, want nil", u, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"javascript:alert(1)",
+		"JaVaScRiPt:alert(1)",
+		" javascript:alert(1)",
+		"data:text/html,<script>alert(1)</script>",
+		"vbscript:msgbox(1)",
+		"file:///etc/passwd",
+		"ftp://example.com/file",
+		"//evil.example.com/path", // scheme-relative
+		"example.com/no-scheme",
+		"java\nscript:alert(1)", // control chars fail url.Parse
+	}
+	for _, u := range invalid {
+		if err := ValidateLinkURL(u); !errors.Is(err, ErrURLSchemeInvalid) {
+			t.Errorf("ValidateLinkURL(%q) = %v, want ErrURLSchemeInvalid", u, err)
+		}
+	}
+
+	// A valid scheme with no host is unresolvable typo territory, not a
+	// security issue — rejected with its own error so the message can say
+	// what is actually wrong (PR #280 review follow-up).
+	hostless := []string{
+		"http://",
+		"https:",
+		"http:opaque",
+		"https://?q=1",
+		"https:///path-only",
+	}
+	for _, u := range hostless {
+		if err := ValidateLinkURL(u); !errors.Is(err, ErrURLHostMissing) {
+			t.Errorf("ValidateLinkURL(%q) = %v, want ErrURLHostMissing", u, err)
+		}
+	}
+}
+
+// Tag display names get a safe charset at intake — defense in depth for the
+// stored XSS fixed at the output layer in #246, and a guarantee that every
+// accepted name derives a non-empty slug (issue #251).
+func TestValidateTagName(t *testing.T) {
+	valid := []string{
+		"jira",
+		"Jira",
+		"My Tag",
+		"web-dev",
+		"snake_case",
+		"a",
+		"3d-printing",
+		"  padded  ", // matches store trimming
+		strings.Repeat("a", MaxTagNameLength),
+	}
+	for _, name := range valid {
+		if err := ValidateTagName(name); err != nil {
+			t.Errorf("ValidateTagName(%q) = %v, want nil", name, err)
+		}
+	}
+
+	invalid := []struct {
+		name    string
+		tag     string
+		wantErr error
+	}{
+		{"empty", "", ErrTagNameInvalid},
+		{"whitespace only", "   ", ErrTagNameInvalid},
+		{"XSS payload from #241 review", `x');fetch('/evil')//`, ErrTagNameInvalid},
+		{"html injection", `<img src=x onerror=alert(1)>`, ErrTagNameInvalid},
+		{"attribute breakout", `x') alert('pwned`, ErrTagNameInvalid},
+		{"leading hyphen", "-foo", ErrTagNameInvalid},
+		{"leading underscore", "_foo", ErrTagNameInvalid},
+		{"empty-slug degenerate: non-ASCII", "日本語", ErrTagNameInvalid},
+		{"empty-slug degenerate: symbols", `'';!--"<XSS>`, ErrTagNameInvalid},
+		{"comma", "a,b", ErrTagNameInvalid},
+		{"over max length", strings.Repeat("a", MaxTagNameLength+1), ErrTagNameTooLong},
+	}
+	for _, tt := range invalid {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateTagName(tt.tag); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ValidateTagName(%q) = %v, want %v", tt.tag, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// A single write may attach at most MaxTagsPerLink tags (issue #265).
+func TestValidateTagNames(t *testing.T) {
+	atCap := make([]string, MaxTagsPerLink)
+	for i := range atCap {
+		atCap[i] = "tag" + strings.Repeat("x", i%5)
+	}
+	if err := ValidateTagNames(atCap); err != nil {
+		t.Errorf("ValidateTagNames(%d tags) = %v, want nil", len(atCap), err)
+	}
+
+	overCap := append(atCap, "one-too-many")
+	if err := ValidateTagNames(overCap); !errors.Is(err, ErrTooManyTags) {
+		t.Errorf("ValidateTagNames(%d tags) = %v, want ErrTooManyTags", len(overCap), err)
+	}
+
+	if err := ValidateTagNames([]string{"fine", `x');fetch('/evil')//`}); !errors.Is(err, ErrTagNameInvalid) {
+		t.Errorf("ValidateTagNames with hostile name = %v, want ErrTagNameInvalid", err)
+	}
+	if err := ValidateTagNames(nil); err != nil {
+		t.Errorf("ValidateTagNames(nil) = %v, want nil", err)
+	}
+}
+
 // Governing: SPEC-0002 REQ "Links Table" scenarios "Title/Description Exceeds Maximum Length"
 func TestValidateLinkText(t *testing.T) {
 	tests := []struct {

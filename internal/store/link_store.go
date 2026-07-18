@@ -71,6 +71,10 @@ func (s *LinkStore) Create(ctx context.Context, slug, url, ownerID, title, descr
 	if err := ValidateSlugFormat(slug); err != nil {
 		return nil, err
 	}
+	// Same backstop for the destination URL scheme (issue #265).
+	if err := ValidateLinkURL(url); err != nil {
+		return nil, err
+	}
 	if visibility == "" {
 		visibility = "public"
 	}
@@ -123,6 +127,15 @@ func (s *LinkStore) CreateFull(ctx context.Context, slug, url, ownerID, title, d
 	// source of truth for slug format + reservation (#204) — a future direct
 	// caller must not be able to bypass it.
 	if err := ValidateSlugFormat(slug); err != nil {
+		return nil, err
+	}
+	// Same backstop for the destination URL scheme and the tag list — hostile
+	// tag names and non-http(s) URLs are rejected before any row is written
+	// (issues #251, #265).
+	if err := ValidateLinkURL(url); err != nil {
+		return nil, err
+	}
+	if err := ValidateTagNames(tagNames); err != nil {
 		return nil, err
 	}
 	if visibility == "" {
@@ -306,14 +319,16 @@ func (s *LinkStore) SearchByOwner(ctx context.Context, ownerID, q string) ([]*Li
 		return s.ListByOwner(ctx, ownerID)
 	}
 	var links []*Link
-	pattern := "%" + q + "%"
+	// LIKE metacharacters in the search term are escaped so user input matches
+	// literally (issue #265).
+	pattern := "%" + escapeLike(q) + "%"
 	// LOWER(col) LIKE LOWER(?) so matching is case-insensitive on PostgreSQL
 	// too (plain LIKE is case-sensitive there; SQLite/MySQL already fold ASCII).
 	err := s.db.SelectContext(ctx, &links, s.q(`
 		SELECT l.* FROM links l
 		INNER JOIN link_owners lo ON lo.link_id = l.id
 		WHERE lo.user_id = ?
-		  AND (LOWER(l.slug) LIKE LOWER(?) OR LOWER(l.url) LIKE LOWER(?) OR LOWER(l.description) LIKE LOWER(?))
+		  AND (LOWER(l.slug) LIKE LOWER(?) ESCAPE '!' OR LOWER(l.url) LIKE LOWER(?) ESCAPE '!' OR LOWER(l.description) LIKE LOWER(?) ESCAPE '!')
 		ORDER BY l.slug ASC
 	`), ownerID, pattern, pattern, pattern)
 	if err != nil {
@@ -330,11 +345,12 @@ func (s *LinkStore) SearchAll(ctx context.Context, q string) ([]*Link, error) {
 		return s.ListAll(ctx)
 	}
 	var links []*Link
-	pattern := "%" + q + "%"
+	// LIKE metacharacters escaped — see SearchByOwner (issue #265).
+	pattern := "%" + escapeLike(q) + "%"
 	// LOWER(col) LIKE LOWER(?) — see SearchByOwner for the PostgreSQL rationale.
 	err := s.db.SelectContext(ctx, &links, s.q(`
 		SELECT * FROM links
-		WHERE LOWER(slug) LIKE LOWER(?) OR LOWER(url) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?)
+		WHERE LOWER(slug) LIKE LOWER(?) ESCAPE '!' OR LOWER(url) LIKE LOWER(?) ESCAPE '!' OR LOWER(description) LIKE LOWER(?) ESCAPE '!'
 		ORDER BY slug ASC
 	`), pattern, pattern, pattern)
 	if err != nil {
@@ -367,6 +383,10 @@ func (s *LinkStore) ListByOwnerAndTag(ctx context.Context, ownerID, tagSlug stri
 func (s *LinkStore) Update(ctx context.Context, id, url, title, description, visibility string) (*Link, error) {
 	// Governing: SPEC-0002 REQ "Links Table" — reject over-length title/description before update
 	if err := ValidateLinkText(title, description); err != nil {
+		return nil, err
+	}
+	// Scheme allowlist backstop, matching Create/CreateFull (issue #265).
+	if err := ValidateLinkURL(url); err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
@@ -452,6 +472,12 @@ func (s *LinkStore) RemoveOwner(ctx context.Context, linkID, userID string) erro
 // link_tags primary key and roll back the whole transaction. First occurrence
 // wins. Mirrors CreateFull's dedupe (issue #198).
 func (s *LinkStore) SetTags(ctx context.Context, linkID string, tagNames []string) error {
+	// Reject hostile names and oversized tag lists before any row is touched,
+	// so a failed validation cannot leave the link with its tags cleared
+	// (issues #251, #265).
+	if err := ValidateTagNames(tagNames); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
@@ -537,7 +563,8 @@ func (s *LinkStore) ListAllAdmin(ctx context.Context, q string) ([]*AdminLink, e
 	)
 	var args []interface{}
 	if q != "" {
-		pattern := "%" + q + "%"
+		// LIKE metacharacters escaped — see SearchByOwner (issue #265).
+		pattern := "%" + escapeLike(q) + "%"
 		// The owner-name filter is an EXISTS subquery, not a WHERE on the joined
 		// u.display_name: filtering the joined rows would drop every non-matching
 		// owner/tag row before GROUP_CONCAT/STRING_AGG runs, truncating the
@@ -545,11 +572,11 @@ func (s *LinkStore) ListAllAdmin(ctx context.Context, q string) ([]*AdminLink, e
 		// LOWER(col) LIKE LOWER(?) keeps matching case-insensitive on PostgreSQL,
 		// where plain LIKE is case-sensitive (SQLite/MySQL already match ASCII
 		// case-insensitively, so this is a no-op there).
-		query += ` WHERE LOWER(l.slug) LIKE LOWER(?) OR LOWER(l.url) LIKE LOWER(?) OR LOWER(l.title) LIKE LOWER(?)
+		query += ` WHERE LOWER(l.slug) LIKE LOWER(?) ESCAPE '!' OR LOWER(l.url) LIKE LOWER(?) ESCAPE '!' OR LOWER(l.title) LIKE LOWER(?) ESCAPE '!'
 			OR EXISTS (
 				SELECT 1 FROM link_owners lo2
 				INNER JOIN users u2 ON u2.id = lo2.user_id
-				WHERE lo2.link_id = l.id AND LOWER(u2.display_name) LIKE LOWER(?)
+				WHERE lo2.link_id = l.id AND LOWER(u2.display_name) LIKE LOWER(?) ESCAPE '!'
 			)`
 		args = append(args, pattern, pattern, pattern, pattern)
 	}
@@ -638,9 +665,10 @@ func (s *LinkStore) ListPublic(ctx context.Context, currentUserID, q string, pag
 	baseWhere := `WHERE l.visibility = 'public'`
 	var args []interface{}
 	if q != "" {
-		pattern := "%" + q + "%"
+		// LIKE metacharacters escaped — see SearchByOwner (issue #265).
+		pattern := "%" + escapeLike(q) + "%"
 		// LOWER(col) LIKE LOWER(?) — see SearchByOwner for the PostgreSQL rationale.
-		baseWhere += ` AND (LOWER(l.slug) LIKE LOWER(?) OR LOWER(l.url) LIKE LOWER(?) OR LOWER(l.title) LIKE LOWER(?) OR LOWER(l.description) LIKE LOWER(?))`
+		baseWhere += ` AND (LOWER(l.slug) LIKE LOWER(?) ESCAPE '!' OR LOWER(l.url) LIKE LOWER(?) ESCAPE '!' OR LOWER(l.title) LIKE LOWER(?) ESCAPE '!' OR LOWER(l.description) LIKE LOWER(?) ESCAPE '!')`
 		args = append(args, pattern, pattern, pattern, pattern)
 	}
 

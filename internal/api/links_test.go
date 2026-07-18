@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -494,5 +495,133 @@ func TestLinks_Create_DashPrefixedSlug_Accepted(t *testing.T) {
 	}
 	if _, err := env.LinkStore.GetBySlug(context.Background(), "u-foo"); err != nil {
 		t.Errorf("GetBySlug(u-foo) = %v, want link", err)
+	}
+}
+
+// postLinkExpectingError posts a create body and asserts a 400 with the given
+// error code (issues #251, #265).
+func postLinkExpectingError(t *testing.T, env *testEnv, token, body, wantCode string) {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/links", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	authRequest(req, token)
+	rec := httptest.NewRecorder()
+	env.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	var resp struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Code != wantCode {
+		t.Errorf("code = %q, want %q (error: %s)", resp.Code, wantCode, resp.Error)
+	}
+}
+
+// javascript:/data: URLs are rejected with 400 INVALID_URL on the REST create
+// surface (issue #265).
+func TestLinks_Create_NonHTTPScheme_Rejected(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "alice@example.com", "user")
+	token := seedToken(t, env, user.ID)
+
+	for _, badURL := range []string{"javascript:alert(1)", "data:text/html,x", "//evil.example.com"} {
+		body, _ := json.Marshal(map[string]any{"slug": "evil-url", "url": badURL})
+		postLinkExpectingError(t, env, token, string(body), "INVALID_URL")
+		if _, err := env.LinkStore.GetBySlug(context.Background(), "evil-url"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("url=%q: link exists after rejected create, err = %v", badURL, err)
+		}
+	}
+}
+
+// Hostile tag names are rejected with 400 INVALID_TAG_NAME before any write —
+// defense in depth for the stored XSS class fixed at the output layer in #246
+// (issue #251).
+func TestLinks_Create_HostileTagName_Rejected(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "alice@example.com", "user")
+	token := seedToken(t, env, user.ID)
+
+	body, _ := json.Marshal(map[string]any{
+		"slug": "evil-tags", "url": "https://example.com",
+		"tags": []string{`x');fetch('/evil')//`},
+	})
+	postLinkExpectingError(t, env, token, string(body), "INVALID_TAG_NAME")
+	if _, err := env.LinkStore.GetBySlug(context.Background(), "evil-tags"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("link exists after rejected create, err = %v", err)
+	}
+}
+
+// More than MaxTagsPerLink tags in one create is rejected with 400
+// TOO_MANY_TAGS (issue #265).
+func TestLinks_Create_TooManyTags_Rejected(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "alice@example.com", "user")
+	token := seedToken(t, env, user.ID)
+
+	tags := make([]string, store.MaxTagsPerLink+1)
+	for i := range tags {
+		tags[i] = fmt.Sprintf("tag-%d", i)
+	}
+	body, _ := json.Marshal(map[string]any{"slug": "too-tagged", "url": "https://example.com", "tags": tags})
+	postLinkExpectingError(t, env, token, string(body), "TOO_MANY_TAGS")
+}
+
+// Update rejects javascript: URLs and hostile tag names with the same codes as
+// create, and leaves the link untouched (issues #251, #265).
+func TestLinks_Update_HostileInputs_Rejected(t *testing.T) {
+	env := newTestEnv(t)
+	user := seedUser(t, env, "alice@example.com", "user")
+	token := seedToken(t, env, user.ID)
+
+	link, err := env.LinkStore.Create(context.Background(), "target", "https://example.com", user.ID, "Keep", "", "")
+	if err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		body     map[string]any
+		wantCode string
+	}{
+		{"javascript url", map[string]any{"url": "javascript:alert(1)"}, "INVALID_URL"},
+		{"hostile tag", map[string]any{"url": "https://example.com/new", "tags": []string{`x');fetch('/evil')//`}}, "INVALID_TAG_NAME"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := json.Marshal(tc.body)
+			req := httptest.NewRequest("PUT", "/links/"+link.ID, bytes.NewBuffer(b))
+			req.Header.Set("Content-Type", "application/json")
+			authRequest(req, token)
+			rec := httptest.NewRecorder()
+			env.Router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			var resp struct {
+				Code string `json:"code"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Code != tc.wantCode {
+				t.Errorf("code = %q, want %q", resp.Code, tc.wantCode)
+			}
+
+			// The link row is untouched — validation runs before any write.
+			got, err := env.LinkStore.GetByID(context.Background(), link.ID)
+			if err != nil {
+				t.Fatalf("reload link: %v", err)
+			}
+			if got.URL != "https://example.com" || got.Title != "Keep" {
+				t.Errorf("link modified by rejected update: url=%q title=%q", got.URL, got.Title)
+			}
+		})
 	}
 }
