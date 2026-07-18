@@ -1,0 +1,65 @@
+<!-- Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021 -->
+{{/* Daily-clicks chart card: server-rendered inline SVG (no chart library, no
+     client-side rendering JS) with an HTMX 30/90-day window toggle that swaps
+     this partial. Pruned days — days before the retention horizon — render as
+     a dimmed no-data band, visually distinct from zero-count days, because a
+     pruned day is not an unclicked day. The bucket containing the horizon can
+     be Pruned with Count > 0 (rows newer than the horizon survived inside it);
+     that partial bucket renders BOTH the no-data band and a bar at the
+     observed count, tooltipped as a lower bound. */}}
+{{define "stats_chart"}}
+<div id="daily-clicks-chart" class="card bg-base-200 shadow mb-8">
+    <div class="card-body">
+        <div class="flex items-center justify-between gap-2 flex-wrap mb-2">
+            <div>
+                <h2 class="card-title text-lg">Daily Clicks</h2>
+                <p class="text-xs text-base-content/50">{{.Chart.Total}} click{{if ne .Chart.Total 1}}s{{end}} in the last {{.Days}} days</p>
+            </div>
+            {{/* Window toggle: an HTMX fragment swap re-requesting this chart
+                 partial with a days parameter (SPEC-0021). */}}
+            <div class="join" role="group" aria-label="Chart window">
+                <button type="button"
+                        class="btn btn-xs join-item{{if eq .Days 30}} btn-primary{{else}} btn-ghost{{end}}"
+                        hx-get="/dashboard/links/{{.LinkID}}/stats/chart?days=30"
+                        hx-target="#daily-clicks-chart" hx-swap="outerHTML">30 days</button>
+                <button type="button"
+                        class="btn btn-xs join-item{{if eq .Days 90}} btn-primary{{else}} btn-ghost{{end}}"
+                        hx-get="/dashboard/links/{{.LinkID}}/stats/chart?days=90"
+                        hx-target="#daily-clicks-chart" hx-swap="outerHTML">90 days</button>
+            </div>
+        </div>
+        {{if .Chart.Bars}}
+        <svg viewBox="0 0 {{.Chart.Width}} {{.Chart.Height}}" preserveAspectRatio="none"
+             class="w-full h-44" role="img"
+             aria-label="Daily clicks over the last {{.Days}} days">
+            <line x1="{{.Chart.LeftX}}" y1="{{.Chart.BaseY}}" x2="{{.Chart.RightX}}" y2="{{.Chart.BaseY}}" class="stroke-base-content/20" stroke-width="1"></line>
+            {{range .Chart.Bars}}
+            <g data-date="{{.Date}}" data-count="{{.Count}}"{{if .Pruned}} data-pruned="true"{{end}}>
+                <title>{{.Tooltip}}</title>
+                {{if .Pruned}}
+                {{/* No-data band: rows for this day were pruned by retention. */}}
+                <rect class="chart-nodata fill-base-content/10" x="{{.SlotX}}" y="{{$.Chart.PlotTop}}" width="{{.SlotWidth}}" height="{{$.Chart.PlotHeight}}"></rect>
+                {{end}}
+                {{if gt .Count 0}}
+                <rect class="chart-bar fill-primary" x="{{.X}}" y="{{.Y}}" width="{{.Width}}" height="{{.Height}}" rx="1"></rect>
+                {{else if not .Pruned}}
+                {{/* Zero-height mark: the day position is present, just unclicked. */}}
+                <rect class="chart-zero fill-base-content/25" x="{{.X}}" y="{{.Y}}" width="{{.Width}}" height="{{.Height}}"></rect>
+                {{end}}
+            </g>
+            {{end}}
+        </svg>
+        <div class="flex justify-between text-xs text-base-content/50 mt-1">
+            <span>{{.Chart.StartLabel}}</span>
+            {{if gt .Chart.MaxCount 0}}<span>peak {{.Chart.MaxCount}}/day</span>{{end}}
+            <span>{{.Chart.EndLabel}}</span>
+        </div>
+        {{if .Chart.HasPruned}}
+        <p class="text-xs text-base-content/50 mt-2">Dimmed days precede the retention horizon: their click rows were pruned, so no data is shown. A bar on the horizon day is a lower bound.</p>
+        {{end}}
+        {{else}}
+        <p class="text-base-content/50">No click data yet.</p>
+        {{end}}
+    </div>
+</div>
+{{end}}

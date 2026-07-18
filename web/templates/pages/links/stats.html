@@ -28,6 +28,10 @@
         </div>
     </div>
 
+    <!-- Daily clicks chart -->
+    <!-- Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021 -->
+    {{template "stats_chart" .ChartData}}
+
     <!-- Recent clicks table -->
     <div class="card bg-base-200 shadow">
         <div class="card-body">
@@ -45,11 +49,13 @@
                     <tbody>
                         {{range .RecentClicks}}
                         <tr>
-                            {{/* Convert to UTC before formatting so the label is truthful
-                                 regardless of the driver's time.Time zone; the title carries
-                                 the RFC 3339 form (issue #206). Local-timezone rendering is
-                                 deferred to epic #216. */}}
-                            <td class="whitespace-nowrap" title="{{.ClickedAt.UTC.Format "2006-01-02T15:04:05Z07:00"}}">{{.ClickedAt.UTC.Format "Jan 2, 2006 3:04 PM"}} UTC</td>
+                            {{/* Governing: SPEC-0021 REQ "Viewer-Local Timestamps", ADR-0021 —
+                                 server stamps the UTC RFC 3339 instant in <time datetime> (never
+                                 user-controlled) with UTC fallback text; the static localtime.js
+                                 snippet rewrites the text to the viewer's local timezone and keeps
+                                 the UTC form in title. With JS unavailable this UTC text remains
+                                 (supersedes the interim #206 rendering). */}}
+                            <td class="whitespace-nowrap"><time datetime="{{.ClickedAt.UTC.Format "2006-01-02T15:04:05Z07:00"}}" title="{{.ClickedAt.UTC.Format "2006-01-02T15:04:05Z07:00"}}">{{.ClickedAt.UTC.Format "Jan 2, 2006 3:04 PM"}} UTC</time></td>
                             <td class="truncate max-w-xs">{{if .Referrer}}{{.Referrer}}{{else}}<span class="text-base-content/40">direct</span>{{end}}</td>
                             {{if $.ShowClickers}}<td>{{if .DisplayName}}{{.DisplayName}}{{else}}<span class="text-base-content/40">anonymous</span>{{end}}</td>{{end}}
                         </tr>

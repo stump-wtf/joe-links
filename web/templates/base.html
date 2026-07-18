@@ -8,6 +8,8 @@
     <script>!function(){var c=document.cookie.match(/theme=(joe-(?:light|dark))/);document.documentElement.dataset.theme=c?c[1]:matchMedia("(prefers-color-scheme:dark)").matches?"joe-dark":"joe-light"}()</script>
     <link rel="stylesheet" href="/static/css/app.css">
     <script src="/static/js/htmx.min.js"></script>
+    <!-- Governing: SPEC-0021 REQ "Viewer-Local Timestamps", ADR-0021 — static viewer-local <time> rewrite, progressive enhancement -->
+    <script src="/static/js/localtime.js" defer></script>
 </head>
 <body class="min-h-screen bg-base-100"
       hx-on:themeChanged="(function(t){document.documentElement.setAttribute('data-theme',t);var s=document.getElementById('theme-icon-sun'),m=document.getElementById('theme-icon-moon');if(s)s.style.display=t==='joe-dark'?'block':'none';if(m)m.style.display=t==='joe-dark'?'none':'block'})(event.detail.theme)">
