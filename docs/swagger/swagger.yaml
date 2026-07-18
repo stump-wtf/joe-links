@@ -151,6 +151,25 @@ definitions:
       slug:
         type: string
     type: object
+  internal_api.TimeSeriesPoint:
+    properties:
+      count:
+        type: integer
+      date:
+        description: UTC calendar day, YYYY-MM-DD
+        type: string
+    type: object
+  internal_api.TimeSeriesResponse:
+    properties:
+      days:
+        type: integer
+      link_id:
+        type: string
+      series:
+        items:
+          $ref: '#/definitions/internal_api.TimeSeriesPoint'
+        type: array
+    type: object
   internal_api.TokenCreatedResponse:
     properties:
       created_at:
@@ -852,6 +871,55 @@ paths:
       summary: Remove a share
       tags:
       - Shares
+  /links/{id}/stats/timeseries:
+    get:
+      consumes:
+      - application/json
+      description: Daily click counts for the link over the last 30 (default) or 90
+        UTC calendar days. The series contains exactly `days` entries, ascending by
+        date, gap-filled with zeros.
+      parameters:
+      - description: Link ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 'Window size in days: 30 (default) or 90'
+        in: query
+        name: days
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.TimeSeriesResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      security:
+      - BearerToken: []
+      summary: Get link click time series
+      tags:
+      - Stats
   /links/suggest:
     post:
       consumes:

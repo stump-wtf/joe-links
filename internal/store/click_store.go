@@ -1,4 +1,5 @@
 // Governing: SPEC-0016 REQ "Click Data Schema", REQ "Click Recording", ADR-0016
+// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021
 package store
 
 import (
@@ -199,6 +200,101 @@ func (s *ClickStore) ListRecentClicksBefore(ctx context.Context, linkID string, 
 		return nil, err
 	}
 	return clicks, nil
+}
+
+// DailyClickCount is one UTC-calendar-day bucket in a link's click time
+// series. Pruned distinguishes a day older than the retention horizon
+// (no-data — the rows were deleted) from a genuinely unclicked day (zero):
+// a pruned day is not an unclicked day.
+// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021
+type DailyClickCount struct {
+	Date   string // UTC calendar day, "2006-01-02"
+	Count  int64
+	Pruned bool // day opens before the retention horizon: render as no-data, not zero
+}
+
+// GetDailyClickSeries returns exactly days (30 or 90) UTC-day buckets for a
+// link, ascending by date, ending on today's (partial) UTC day. Gap days are
+// present with zero counts — consumers never interpolate. retentionDays > 0
+// marks buckets opening before the retention horizon (now − retentionDays)
+// as Pruned; 0 disables the marker (retention off, the default).
+// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021
+func (s *ClickStore) GetDailyClickSeries(ctx context.Context, linkID string, days, retentionDays int) ([]DailyClickCount, error) {
+	return s.dailyClickSeries(ctx, linkID, days, retentionDays, time.Now().UTC())
+}
+
+// dailyClickSeries is GetDailyClickSeries with an injectable clock for tests.
+//
+// Index strategy: one indexed range scan on idx_link_clicks_link_id_clicked_at
+// (link_id, clicked_at DESC — migration 00012); no full-table scan regardless
+// of how hot the link is, and no new index or migration is needed. Bucketing
+// happens in Go — no SQL date functions (strftime/DATE_FORMAT/to_char), the
+// most dialect-divergent SQL there is (ADR-0002, ADR-0021). Rows stream
+// through a bounded counts map; the fetched timestamps are never materialized
+// as a full in-memory slice.
+// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021, ADR-0002
+func (s *ClickStore) dailyClickSeries(ctx context.Context, linkID string, days, retentionDays int, now time.Time) ([]DailyClickCount, error) {
+	// The only valid windows are 30 and 90; callers own their own policy
+	// (API: 400, web UI: fall back to 30) before reaching the store.
+	// Governing: SPEC-0021 REQ "Per-Link Daily Time Series"
+	if days != 30 && days != 90 {
+		return nil, fmt.Errorf("invalid time series window %d days: must be 30 or 90", days)
+	}
+
+	// Window boundaries are pinned: buckets are whole UTC calendar days; the
+	// window is today's UTC day (partial until the day ends) plus the
+	// preceding days−1 whole days; the SQL range predicate is aligned to the
+	// UTC midnight opening the oldest bucket — never a rolling now−Nd bound.
+	// Governing: SPEC-0021 REQ "Per-Link Daily Time Series"
+	now = now.UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	windowStart := today.AddDate(0, 0, -(days - 1))
+
+	rows, err := s.db.QueryContext(ctx, s.q(`
+		SELECT clicked_at FROM link_clicks
+		WHERE link_id = ? AND clicked_at >= ?
+	`), linkID, windowStart)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Bucket by UTC calendar day in Go, streaming over the result rows with
+	// counts accumulated in bounded memory (one entry per distinct day).
+	counts := make(map[string]int64, days)
+	for rows.Next() {
+		var clickedAt time.Time
+		if err := rows.Scan(&clickedAt); err != nil {
+			return nil, err
+		}
+		counts[clickedAt.UTC().Format("2006-01-02")]++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Retention horizon: a bucket whose UTC day opens before now − retention
+	// is (at least partially) pruned territory — no-data, not zero. With a
+	// 60-day horizon and a 90-day window this marks exactly the oldest 30
+	// day positions.
+	// Governing: SPEC-0021 REQ "Per-Link Daily Time Series" — pruned days
+	// distinguished from zero days; REQ "Click Retention"
+	var horizon time.Time
+	if retentionDays > 0 {
+		horizon = now.AddDate(0, 0, -retentionDays)
+	}
+
+	series := make([]DailyClickCount, 0, days)
+	for d := 0; d < days; d++ {
+		day := windowStart.AddDate(0, 0, d)
+		date := day.Format("2006-01-02")
+		series = append(series, DailyClickCount{
+			Date:   date,
+			Count:  counts[date],
+			Pruned: retentionDays > 0 && day.Before(horizon),
+		})
+	}
+	return series, nil
 }
 
 // HashIP computes SHA-256(ip + ":" + YYYYMMDD_UTC) for the current day.
