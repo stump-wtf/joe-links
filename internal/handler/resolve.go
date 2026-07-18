@@ -4,6 +4,7 @@
 // Governing: SPEC-0009 REQ "Multi-Segment Path Resolution", REQ "Variable Substitution and Redirect", ADR-0013
 // Governing: SPEC-0010 REQ "Secure Link Resolution", REQ "Public Link Resolution", REQ "Private Link Resolution", ADR-0014
 // Governing: SPEC-0016 REQ "Click Recording", REQ "Prometheus Metrics Endpoint", ADR-0016
+// Governing: SPEC-0019 REQ "Case-Insensitive Slug Resolution", REQ "Slug Normalization Forgiveness", ADR-0019
 package handler
 
 import (
@@ -112,9 +113,30 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	}
 	// kwErr == store.ErrNotFound → fall through to normal slug resolution
 
-	// Step 1: Try exact slug match on the full path.
+	// Step 1: Try exact slug match on the full path. The candidate is
+	// case-folded before lookup: stored slugs are canonically lowercase
+	// (SPEC-0002), so `/JIRA` must find `jira` without any DB collation or
+	// schema change — creation validation still rejects uppercase, keeping the
+	// stored corpus canonical (ADR-0019).
 	// Governing: SPEC-0009 REQ "Multi-Segment Path Resolution" — exact match wins
-	link, err := h.links.GetBySlug(r.Context(), fullPath)
+	// Governing: SPEC-0019 REQ "Case-Insensitive Slug Resolution"
+	lookupPath := strings.ToLower(fullPath)
+	link, err := h.links.GetBySlug(r.Context(), lookupPath)
+	if err == store.ErrNotFound {
+		// Normalization forgiveness: retry the failed case-folded exact lookup
+		// with underscores swapped for hyphens and trailing sentence
+		// punctuation stripped, before prefix matching and the 404 path.
+		// Resolution lookups only — creation, update, and uniqueness checks
+		// stay strict — and a normalized match flows through the same
+		// visibility enforcement below as an exact match.
+		// Governing: SPEC-0019 REQ "Slug Normalization Forgiveness"
+		for _, candidate := range normalizationCandidates(lookupPath) {
+			if l, cErr := h.links.GetBySlug(r.Context(), candidate); cErr == nil {
+				link, err = l, nil
+				break
+			}
+		}
+	}
 	if err == nil {
 		// Governing: SPEC-0010 REQ "Secure Link Resolution", REQ "Public Link Resolution", REQ "Private Link Resolution"
 		if !h.checkVisibility(w, r, link) {
@@ -141,12 +163,17 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	segments := strings.Split(fullPath, "/")
 	if len(segments) > 1 {
 		for i := len(segments) - 1; i >= 1; i-- {
-			prefix := strings.Join(segments[:i], "/")
+			// Case-folding applies uniformly to every prefix candidate; the
+			// remaining segments are taken from the original path below, so
+			// variable values reach substitution with their case preserved.
+			// Governing: SPEC-0019 REQ "Case-Insensitive Slug Resolution"
+			prefix := strings.ToLower(strings.Join(segments[:i], "/"))
 			link, err := h.links.GetBySlug(r.Context(), prefix)
 			if err != nil {
 				continue
 			}
 
+			// Governing: SPEC-0009 REQ "Variable Substitution and Redirect" — original case preserved
 			remaining := segments[i:]
 
 			// Governing: SPEC-0010 REQ "Secure Link Resolution"
@@ -205,6 +232,46 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	// No match found → 404.
 	metrics.RedirectsTotal.WithLabelValues("not_found").Inc()
 	h.render404(w, r, fullPath, true)
+}
+
+// trailingPunct is the set of sentence punctuation forgiven at the end of a
+// requested path — what clings to a go/slug link pasted at the end of a
+// sentence or inside parentheses.
+// Governing: SPEC-0019 REQ "Slug Normalization Forgiveness"
+const trailingPunct = ".,;:!?)"
+
+// normalizationCandidates returns the forgiving retry lookups for a
+// case-folded path whose exact lookup failed: underscores replaced with
+// hyphens, trailing punctuation stripped, and both together. Candidates equal
+// to the already-tried path, empty results, and duplicates are omitted;
+// order is deterministic. This is a resolution-only forgiveness — slug
+// creation, update, and uniqueness checks never normalize
+// (store.ValidateSlugFormat stays the single source of truth for slug rules).
+// Governing: SPEC-0019 REQ "Slug Normalization Forgiveness"
+func normalizationCandidates(path string) []string {
+	// Slugs cannot contain "/" (SPEC-0002), so every candidate derived from a
+	// multi-segment path is a guaranteed miss — skip straight to prefix
+	// matching instead of burning up to three pointless lookups. Forgiveness
+	// applies only to the whole-path exact lookup, per the spec's "before
+	// falling through to prefix matching".
+	if strings.Contains(path, "/") {
+		return nil
+	}
+	hyphenated := strings.ReplaceAll(path, "_", "-")
+	seen := map[string]bool{path: true}
+	var out []string
+	for _, candidate := range []string{
+		hyphenated,
+		strings.TrimRight(path, trailingPunct),
+		strings.TrimRight(hyphenated, trailingPunct),
+	} {
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		out = append(out, candidate)
+	}
+	return out
 }
 
 // checkVisibility enforces visibility rules for a link.
