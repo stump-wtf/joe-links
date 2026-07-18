@@ -347,6 +347,61 @@ const docTemplate = `{
             }
         },
         "/links/suggest": {
+            "get": {
+                "security": [
+                    {
+                        "BearerToken": []
+                    }
+                ],
+                "description": "Returns slug+title autocomplete suggestions for links visible to the caller (public, owned, co-owned, or shared; admins see all), ranked slug-prefix matches first, then slug-substring, then title/description matches. Expired and archived links are excluded. Distinct from POST /links/suggest, which generates LLM metadata for a new link.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Links"
+                ],
+                "summary": "Autocomplete link suggestions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Query text, matched literally (LIKE wildcards are escaped); empty returns no suggestions; truncated to 64 characters",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max suggestions to return (default 5, max 10; higher values are clamped)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.SuggestLinksResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Non-numeric or non-positive limit",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    }
+                }
+            },
             "post": {
                 "security": [
                     {
@@ -1524,6 +1579,17 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api.LinkSuggestion": {
+            "type": "object",
+            "properties": {
+                "slug": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api.OwnerResponse": {
             "type": "object",
             "properties": {
@@ -1558,6 +1624,17 @@ const docTemplate = `{
                 },
                 "user_id": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api.SuggestLinksResponse": {
+            "type": "object",
+            "properties": {
+                "suggestions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.LinkSuggestion"
+                    }
                 }
             }
         },

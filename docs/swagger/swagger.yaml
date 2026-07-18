@@ -91,6 +91,13 @@ definitions:
       visibility:
         type: string
     type: object
+  internal_api.LinkSuggestion:
+    properties:
+      slug:
+        type: string
+      title:
+        type: string
+    type: object
   internal_api.OwnerResponse:
     properties:
       email:
@@ -114,6 +121,13 @@ definitions:
         type: string
       user_id:
         type: string
+    type: object
+  internal_api.SuggestLinksResponse:
+    properties:
+      suggestions:
+        items:
+          $ref: '#/definitions/internal_api.LinkSuggestion'
+        type: array
     type: object
   internal_api.SuggestRequest:
     properties:
@@ -929,6 +943,47 @@ paths:
       tags:
       - Stats
   /links/suggest:
+    get:
+      description: Returns slug+title autocomplete suggestions for links visible to
+        the caller (public, owned, co-owned, or shared; admins see all), ranked slug-prefix
+        matches first, then slug-substring, then title/description matches. Expired
+        and archived links are excluded. Distinct from POST /links/suggest, which
+        generates LLM metadata for a new link.
+      parameters:
+      - description: Query text, matched literally (LIKE wildcards are escaped); empty
+          returns no suggestions; truncated to 64 characters
+        in: query
+        name: q
+        type: string
+      - description: Max suggestions to return (default 5, max 10; higher values are
+          clamped)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.SuggestLinksResponse'
+        "400":
+          description: Non-numeric or non-positive limit
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      security:
+      - BearerToken: []
+      summary: Autocomplete link suggestions
+      tags:
+      - Links
     post:
       consumes:
       - application/json

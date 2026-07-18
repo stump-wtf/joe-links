@@ -66,6 +66,12 @@ func NewAPIRouter(deps Deps) http.Handler {
 		suggestH := &suggestAPIHandler{suggester: deps.Suggester}
 		r.Post("/links/suggest", suggestH.Suggest)
 
+		// Link autocomplete suggestions — the GET operation on the same path
+		// (method-disambiguated from the SPEC-0017 POST above, ADR-0019).
+		// Governing: SPEC-0019 REQ "Suggest Endpoint", ADR-0019
+		suggestLinksH := &suggestLinksAPIHandler{links: deps.LinkStore}
+		r.Get("/links/suggest", suggestLinksH.Suggest)
+
 		// Link and co-owner management routes.
 		// Governing: SPEC-0005 REQ "Links Collection", REQ "Link Resource", REQ "Co-Owner Management"
 		registerLinkRoutes(r, deps.LinkStore, deps.OwnershipStore, deps.UserStore)

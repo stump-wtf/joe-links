@@ -126,7 +126,7 @@ func TestResolve_UppercaseSlugStillRejectedAtCreation(t *testing.T) {
 	if _, err := env.ls.Create(context.Background(), "Jira", "https://example.com", env.userID, "", "", ""); !errors.Is(err, store.ErrSlugInvalid) {
 		t.Errorf("Create(Jira) error = %v, want ErrSlugInvalid", err)
 	}
-	if _, err := env.ls.CreateFull(context.Background(), "Jira", "https://example.com", env.userID, "", "", "", nil, nil, ""); !errors.Is(err, store.ErrSlugInvalid) {
+	if _, err := env.ls.CreateFull(context.Background(), "Jira", "https://example.com", env.userID, "", "", "", nil, nil, nil, ""); !errors.Is(err, store.ErrSlugInvalid) {
 		t.Errorf("CreateFull(Jira) error = %v, want ErrSlugInvalid", err)
 	}
 }

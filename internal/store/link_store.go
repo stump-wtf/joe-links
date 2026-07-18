@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -885,4 +886,160 @@ func (s *LinkStore) ListShares(ctx context.Context, linkID string) ([]ShareRecor
 		return nil, err
 	}
 	return shares, nil
+}
+
+// Suggest endpoint bounds.
+// Governing: SPEC-0019 REQ "Suggest Endpoint" — result count default 5,
+// maximum 10; q truncated to 64 characters.
+const (
+	DefaultSuggestLimit = 5
+	MaxSuggestLimit     = 10
+	MaxSuggestQueryLen  = 64
+
+	// suggestCandidateCap bounds the SQL candidate fetch (ADR-0019: the
+	// suggest query is "capped at a small candidate limit"). It exceeds
+	// MaxSuggestLimit so the deterministic in-Go re-ranking always has the
+	// full best-band candidate set to draw from: band is an integer, so the
+	// SQL ORDER BY band cut is exact — a cut row never has a better band
+	// than a kept row. Within the single band straddling the cap the SQL
+	// slug tiebreak follows the driver's collation, which matches Go byte
+	// order on sqlite (BINARY) and C-locale postgres but can diverge on
+	// mysql utf8mb4 / ICU collations (mostly around '-' in slugs); on those
+	// drivers a band with more than suggestCandidateCap matches may cut a
+	// slug that byte-orders into the final top-limit. Accepted: it takes
+	// >50 same-band matches for one query, and the result is still a
+	// valid, visibility-filtered suggestion set — only the tiebreak drifts.
+	suggestCandidateCap = 50
+)
+
+// Shared SQL fragments for SPEC-0019 discovery surfaces. Every discovery
+// query (the suggest endpoint today, the did-you-mean 404 candidate fetch
+// next) composes the same two predicates so visibility filtering cannot
+// diverge per surface (ADR-0019: one authorization code path).
+const (
+	// linkViewerJoins attaches the viewer's ownership and share rows to links
+	// aliased as l. Bind viewerID twice.
+	// Governing: SPEC-0010 — the same joins used by ListVisibleByTag/ListByURL
+	linkViewerJoins = `
+		LEFT JOIN link_owners lo ON lo.link_id = l.id AND lo.user_id = ?
+		LEFT JOIN link_shares ls ON ls.link_id = l.id AND ls.user_id = ?`
+
+	// linkVisibleWhere is the SPEC-0010 visibility predicate for non-admin
+	// viewers: public links plus links the viewer owns/co-owns plus links
+	// shared with the viewer. Requires linkViewerJoins.
+	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
+	linkVisibleWhere = `(l.visibility = 'public' OR lo.user_id IS NOT NULL OR ls.user_id IS NOT NULL)`
+
+	// linkActiveWhere is the SPEC-0020 lifecycle filter: expired and archived
+	// links must never be offered by a discovery surface — suggesting a link
+	// that will not resolve is worse than no suggestion. Bind now (UTC).
+	// Governing: SPEC-0019 REQ "Suggest Endpoint", SPEC-0020
+	linkActiveWhere = `l.archived_at IS NULL AND (l.expires_at IS NULL OR l.expires_at > ?)`
+)
+
+// suggestRow is a Link plus its ranking band, computed in SQL so the
+// candidate cap can never cut a better-band row in favor of a worse one.
+type suggestRow struct {
+	Link
+	Band int `db:"band"`
+}
+
+// SuggestLinks returns up to limit links matching q for autocomplete,
+// visibility-filtered for the viewer (SPEC-0010: public + owned/co-owned +
+// shared; admins see all) and restricted to active links (SPEC-0020: not
+// expired, not archived). Matching uses portable LIKE only, with wildcards in
+// q escaped so user input matches literally; q is lowercased and truncated to
+// MaxSuggestQueryLen here — not in handlers — so every caller gets identical
+// matching semantics. Results are ranked slug-prefix first, then
+// slug-substring, then title/description matches, ties within each band
+// broken by slug ascending in byte order.
+// Governing: SPEC-0019 REQ "Suggest Endpoint", ADR-0019, ADR-0002
+func (s *LinkStore) SuggestLinks(ctx context.Context, viewerID string, isAdmin bool, q string, limit int) ([]*Link, error) {
+	// Governing: SPEC-0019 REQ "Suggest Endpoint" — the server MUST lowercase
+	// q before matching (postgres LIKE is case-sensitive; the slug corpus is
+	// canonically lowercase per SPEC-0002), and q longer than 64 characters
+	// MUST be truncated to 64.
+	q = strings.ToLower(q)
+	if r := []rune(q); len(r) > MaxSuggestQueryLen {
+		q = string(r[:MaxSuggestQueryLen])
+	}
+	// An empty q returns an empty suggestions set, never the whole corpus.
+	if q == "" {
+		return []*Link{}, nil
+	}
+	if limit <= 0 {
+		limit = DefaultSuggestLimit
+	}
+	if limit > MaxSuggestLimit {
+		limit = MaxSuggestLimit
+	}
+
+	// LIKE metacharacters in q are escaped so % and _ match literally, not as
+	// wildcards — see escapeLike (issue #265).
+	// Governing: SPEC-0019 REQ "Suggest Endpoint" scenario "LIKE Wildcards Neutralized"
+	prefixPat := escapeLike(q) + "%"
+	subPat := "%" + escapeLike(q) + "%"
+	now := time.Now().UTC()
+
+	// Band 0 = slug prefix, 1 = slug substring, 2 = title/description match.
+	// Slugs are canonically lowercase so the slug arms need no LOWER();
+	// title/description matching is case-insensitive via LOWER(col) against
+	// the already-lowercased pattern (see SearchByOwner for the rationale).
+	// Caveat shared with SearchByOwner/ListPublic: sqlite's LOWER folds only
+	// ASCII, so a non-ASCII uppercase title (e.g. "Über") matches
+	// case-insensitively on postgres/mysql but not sqlite.
+	const bandCase = `CASE WHEN l.slug LIKE ? ESCAPE '!' THEN 0
+		WHEN l.slug LIKE ? ESCAPE '!' THEN 1 ELSE 2 END`
+	const matchWhere = `(l.slug LIKE ? ESCAPE '!'
+		OR LOWER(l.title) LIKE ? ESCAPE '!'
+		OR LOWER(l.description) LIKE ? ESCAPE '!')`
+
+	var rows []*suggestRow
+	var err error
+	if isAdmin {
+		// Governing: SPEC-0010 REQ "Admin Visibility Override" — admins see all
+		// links; the lifecycle filter still applies.
+		err = s.db.SelectContext(ctx, &rows, s.q(`
+			SELECT l.*, `+bandCase+` AS band
+			FROM links l
+			WHERE `+linkActiveWhere+`
+			  AND `+matchWhere+`
+			ORDER BY band ASC, l.slug ASC
+			LIMIT ?
+		`), prefixPat, subPat, now, subPat, subPat, subPat, suggestCandidateCap)
+	} else {
+		err = s.db.SelectContext(ctx, &rows, s.q(`
+			SELECT DISTINCT l.*, `+bandCase+` AS band
+			FROM links l
+			`+linkViewerJoins+`
+			WHERE `+linkVisibleWhere+`
+			  AND `+linkActiveWhere+`
+			  AND `+matchWhere+`
+			ORDER BY band ASC, l.slug ASC
+			LIMIT ?
+		`), prefixPat, subPat, viewerID, viewerID, now, subPat, subPat, subPat, suggestCandidateCap)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Final ranking in Go (ADR-0019): band precedence, then slug ascending in
+	// byte order — Go string comparison is byte order on every platform,
+	// whereas SQL collations differ per driver.
+	// Governing: SPEC-0019 REQ "Suggest Endpoint" scenario "Prefix Match Ranks First"
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Band != rows[j].Band {
+			return rows[i].Band < rows[j].Band
+		}
+		return rows[i].Slug < rows[j].Slug
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	out := make([]*Link, len(rows))
+	for i, row := range rows {
+		l := row.Link
+		out[i] = &l
+	}
+	return out, nil
 }
