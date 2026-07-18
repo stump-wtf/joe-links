@@ -12,10 +12,16 @@
             <p class="text-base-content/60 mb-6">
                 There's no short link for <span class="font-mono font-semibold">{{.Slug}}</span> yet.
             </p>
+            {{/* Server-side gate (issue #260): only offer creation when the
+                 missed path (or its first segment) is a valid, non-reserved
+                 slug — .Creatable/.Candidate come from creatableCandidate,
+                 backed by store.ValidateSlugFormat. */}}
+            {{if .Creatable}}
             {{if .User}}
-            <a href="/dashboard/links/new?slug={{.Slug}}" class="btn btn-primary">Create this link</a>
+            <a href="/dashboard/links/new?slug={{.Candidate}}" class="btn btn-primary">Create this link</a>
             {{else}}
-            <a href="/auth/login?return_url=/dashboard/links/new%3Fslug%3D{{.Slug}}" class="btn btn-primary">Sign in to create this link</a>
+            <a href="/auth/login?return_url=/dashboard/links/new%3Fslug%3D{{.Candidate}}" class="btn btn-primary">Sign in to create this link</a>
+            {{end}}
             {{end}}
         </div>
     </div>

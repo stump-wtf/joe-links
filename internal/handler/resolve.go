@@ -41,9 +41,31 @@ func NewResolveHandler(ls *store.LinkStore, ks *store.KeywordStore, os *store.Ow
 
 type notFoundPage struct {
 	BasePage
-	User  *store.User
-	Slug  string
-	Flash *Flash
+	User *store.User
+	Slug string
+	// Candidate is the normalized slug the create CTA pre-fills — the first
+	// path segment for multi-segment misses. Creatable gates the CTA
+	// server-side: reserved or format-invalid paths get no create offer at
+	// all, for signed-in and anonymous visitors alike (issue #260).
+	Candidate string
+	Creatable bool
+	Flash     *Flash
+}
+
+// creatableCandidate returns the slug the 404 page may offer to create for a
+// missed path, and whether that offer is valid. Slugs cannot contain "/", so
+// for multi-segment paths the first segment is the candidate — creating it as
+// a variable link is the only way the missed path could ever resolve. Format
+// and reserved-slug checks are delegated to store.ValidateSlugFormat, the
+// single source of truth for slug rules (issue #260).
+// Governing: SPEC-0002 REQ "Slug Uniqueness and Format Validation", ADR-0005
+// Governing: SPEC-0004 REQ "Slug Resolver and 404 Page"
+func creatableCandidate(path string) (string, bool) {
+	candidate, _, _ := strings.Cut(path, "/")
+	if err := store.ValidateSlugFormat(candidate); err != nil {
+		return "", false
+	}
+	return candidate, true
 }
 
 // Resolve looks up a slug and redirects to the target URL, or renders a 404 page.
@@ -59,7 +81,7 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	fullPath := strings.TrimPrefix(r.URL.Path, "/")
 	if fullPath == "" {
 		metrics.RedirectsTotal.WithLabelValues("not_found").Inc()
-		h.render404(w, r, "")
+		h.render404(w, r, "", true)
 		return
 	}
 
@@ -104,7 +126,9 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 		// Governing: SPEC-0009 REQ "Variable Substitution and Redirect", ADR-0013
 		if varPlaceholderRe.MatchString(link.URL) {
 			metrics.RedirectsTotal.WithLabelValues("not_found").Inc()
-			h.render404(w, r, fullPath)
+			// The slug just matched an existing link — a create CTA here is a
+			// guaranteed ErrSlugTaken dead end (issue #260).
+			h.render404(w, r, fullPath, false)
 			return
 		}
 		metrics.RedirectsTotal.WithLabelValues("found").Inc()
@@ -153,7 +177,10 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 			// Arity check: remaining segments must equal unique placeholder count.
 			if len(remaining) != len(unique) {
 				metrics.RedirectsTotal.WithLabelValues("not_found").Inc()
-				h.render404(w, r, fullPath)
+				// Resolution already matched an existing prefix link, and
+				// longer prefixes win before shorter ones — creating the first
+				// segment could never make this path resolve (issue #260).
+				h.render404(w, r, fullPath, false)
 				return
 			}
 
@@ -177,7 +204,7 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 
 	// No match found → 404.
 	metrics.RedirectsTotal.WithLabelValues("not_found").Inc()
-	h.render404(w, r, fullPath)
+	h.render404(w, r, fullPath, true)
 }
 
 // checkVisibility enforces visibility rules for a link.
@@ -278,11 +305,21 @@ func realIP(r *http.Request) string {
 	return host
 }
 
-// render404 renders the 404 page for a missing slug.
-func (h *ResolveHandler) render404(w http.ResponseWriter, r *http.Request, slug string) {
+// render404 renders the 404 page for a missing slug. offerCreate=false
+// suppresses the create CTA unconditionally — used when resolution already
+// matched an existing link (a variable link visited with the wrong arity), so
+// creating the candidate slug is guaranteed to fail with ErrSlugTaken.
+func (h *ResolveHandler) render404(w http.ResponseWriter, r *http.Request, slug string, offerCreate bool) {
 	user := auth.UserFromContext(r.Context())
 	w.WriteHeader(http.StatusNotFound)
-	data := notFoundPage{BasePage: newBasePage(r, user), User: user, Slug: slug}
+	// Only offer creation for paths that could actually become links —
+	// a CTA that lands on an immediate validation error is a dead end
+	// (issue #260).
+	candidate, creatable := "", false
+	if offerCreate {
+		candidate, creatable = creatableCandidate(slug)
+	}
+	data := notFoundPage{BasePage: newBasePage(r, user), User: user, Slug: slug, Candidate: candidate, Creatable: creatable}
 	if isHTMX(r) {
 		renderPageFragment(w, "404.html", "content", data)
 		return
