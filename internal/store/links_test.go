@@ -143,7 +143,7 @@ func TestLinkStore_Update(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	updated, err := ls.Update(ctx, created.ID, "https://new.com", "New", "New desc", "public")
+	updated, err := ls.Update(ctx, created.ID, "https://new.com", "New", "New desc", "public", nil)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}

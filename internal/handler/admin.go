@@ -218,7 +218,10 @@ func (h *AdminHandler) UpdateLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	_, err = h.links.Update(r.Context(), id, url, title, description, existing.Visibility)
+	// Admin inline edits do not expose an expiration input; the stored value
+	// is round-tripped unchanged.
+	// Governing: SPEC-0020 REQ "Link Expiration"
+	_, err = h.links.Update(r.Context(), id, url, title, description, existing.Visibility, existing.ExpiresAt)
 	if err != nil {
 		http.Error(w, "update failed", http.StatusInternalServerError)
 		return

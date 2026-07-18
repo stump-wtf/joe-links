@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/joestump/joe-links/internal/auth"
@@ -17,6 +18,7 @@ import (
 
 // LinkForm holds form input values for creating or editing a link.
 // Governing: SPEC-0010 REQ "Visibility Selector in Link Forms"
+// Governing: SPEC-0020 REQ "Link Expiration" — optional expiration input, empty by default
 type LinkForm struct {
 	Slug        string
 	URL         string
@@ -24,6 +26,7 @@ type LinkForm struct {
 	Description string
 	Tags        string // comma-separated tag names
 	Visibility  string // public, private, or secure
+	ExpiresAt   string // datetime-local value (UTC), empty = never expires
 }
 
 // LinkFormPage is the template data for the new/edit link forms.
@@ -120,6 +123,25 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Description: r.FormValue("description"),
 		Tags:        r.FormValue("tags"),
 		Visibility:  visibility,
+		ExpiresAt:   r.FormValue("expires_at"),
+	}
+
+	// Optional expiration: empty means never expires; a past value is rejected
+	// before any row is written.
+	// Governing: SPEC-0020 REQ "Link Expiration" scenarios "Link Created with
+	// Expiration", "Past Expiration Rejected"
+	expiresAt, expErr := parseExpiresAtForm(form.ExpiresAt)
+	if expErr == nil {
+		expErr = store.ValidateExpiresAt(expiresAt, nil, time.Now().UTC())
+	}
+	if expErr != nil {
+		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Form: form, Error: expErr.Error()}
+		if isHTMX(r) {
+			renderFragment(w, "new_link_modal", data)
+			return
+		}
+		render(w, "new.html", data)
+		return
 	}
 
 	// Governing: SPEC-0010 REQ "Visibility Selector in Link Forms" — validate visibility value
@@ -198,11 +220,17 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// rolls back the link too, so it re-renders the form with an error instead
 	// of silently dropping the tags (issue #198).
 	// Governing: SPEC-0004 REQ "New Link Form" — link+tags create atomically; ADR-0018
-	_, err := h.links.CreateFull(r.Context(), form.Slug, form.URL, user.ID, form.Title, form.Description, form.Visibility, tagNames, nil, "")
+	_, err := h.links.CreateFull(r.Context(), form.Slug, form.URL, user.ID, form.Title, form.Description, form.Visibility, expiresAt, tagNames, nil, "")
 	if err != nil {
 		msg := "Could not create the link. Please try again."
 		if errors.Is(err, store.ErrSlugTaken) {
 			msg = "That slug is already taken. Choose a different one."
+		} else if errors.Is(err, store.ErrExpiresAtInPast) {
+			// The store re-validates expires_at with a later clock than the
+			// handler check above; surface the validation message, not a
+			// generic failure.
+			// Governing: SPEC-0020 REQ "Link Expiration" scenario "Past Expiration Rejected"
+			msg = err.Error()
 		} else {
 			log.Printf("create link %q: %v", form.Slug, err)
 		}
@@ -262,6 +290,10 @@ func (h *LinksHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		Description: link.Description,
 		Tags:        strings.Join(tagNames, ", "),
 		Visibility:  link.Visibility,
+		// Pre-fill the stored expiration so it round-trips unchanged (expired
+		// links stay editable) and is clearable on edit.
+		// Governing: SPEC-0020 REQ "Link Expiration"
+		ExpiresAt: formatExpiresAtForm(link.ExpiresAt),
 	}
 
 	data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form}
@@ -314,6 +346,28 @@ func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Description: r.FormValue("description"),
 		Tags:        r.FormValue("tags"),
 		Visibility:  visibility,
+		ExpiresAt:   r.FormValue("expires_at"),
+	}
+
+	// Expiration: the edit form always submits the field — empty clears it,
+	// the round-tripped stored (possibly past) value is accepted unchanged,
+	// and a NEW past value is rejected. Share recipients never reach this
+	// handler (IsOwnerOrAdmin gate above).
+	// Governing: SPEC-0020 REQ "Link Expiration" scenarios "Past Expiration
+	// Rejected", "Expired Link Stays Editable", "Expiration Cleared on Edit",
+	// "Share Recipient Cannot Set Expiry"
+	expiresAt, expErr := parseExpiresAtForm(form.ExpiresAt)
+	if expErr == nil {
+		expErr = store.ValidateExpiresAt(expiresAt, link.ExpiresAt, time.Now().UTC())
+	}
+	if expErr != nil {
+		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: expErr.Error()}
+		if isHTMX(r) {
+			renderFragment(w, "edit_link_modal", data)
+			return
+		}
+		render(w, "edit.html", data)
+		return
 	}
 
 	// Governing: SPEC-0010 REQ "Visibility Selector in Link Forms" — validate visibility value
@@ -373,9 +427,16 @@ func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.links.Update(r.Context(), id, form.URL, form.Title, form.Description, form.Visibility)
+	_, err = h.links.Update(r.Context(), id, form.URL, form.Title, form.Description, form.Visibility, expiresAt)
 	if err != nil {
-		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: "Update failed."}
+		msg := "Update failed."
+		// The store re-validates expires_at with a later clock than the handler
+		// check above; surface the validation message, not a generic failure.
+		// Governing: SPEC-0020 REQ "Link Expiration" scenario "Past Expiration Rejected"
+		if errors.Is(err, store.ErrExpiresAtInPast) {
+			msg = err.Error()
+		}
+		data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: msg}
 		// Governing: SPEC-0013 REQ "Create/Edit Link Form as HTMX Modal" — re-render inside modal on error
 		if isHTMX(r) {
 			renderFragment(w, "edit_link_modal", data)
@@ -474,6 +535,38 @@ func (h *LinksHandler) ConfirmDelete(w http.ResponseWriter, r *http.Request) {
 		Target:    "#link-" + id,
 	}
 	renderFragment(w, "confirm_delete", data)
+}
+
+// expiresAtFormLayout is the wire format of the expiration form input: HTML
+// datetime-local with step="1" (seconds shown so a stored value round-trips
+// losslessly). Values are interpreted as UTC, matching the column semantics.
+// Governing: SPEC-0020 REQ "Link Expiration"
+const expiresAtFormLayout = "2006-01-02T15:04:05"
+
+// parseExpiresAtForm parses the optional expires_at form field. Empty means
+// "no expiration" (create) / "clear it" (edit). Browsers omit trailing
+// zero-seconds from datetime-local values, so the minute-precision form is
+// accepted too.
+// Governing: SPEC-0020 REQ "Link Expiration"
+func parseExpiresAtForm(s string) (*time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	for _, layout := range []string{expiresAtFormLayout, "2006-01-02T15:04"} {
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+			return &t, nil
+		}
+	}
+	return nil, errors.New("expiration must be a date and time (UTC)")
+}
+
+// formatExpiresAtForm renders a stored expires_at for the edit form input.
+func formatExpiresAtForm(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(expiresAtFormLayout)
 }
 
 // parseTagNames splits a comma-separated string into trimmed, non-empty tag names.

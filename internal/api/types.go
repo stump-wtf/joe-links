@@ -1,7 +1,35 @@
 // Governing: SPEC-0005 REQ "API Response Structures", SPEC-0007 REQ "Request/Response Type Declarations", ADR-0008
 package api
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
+
+// OptionalTime distinguishes an omitted JSON field from an explicit null so
+// PUT /links/{id} can tell "leave expires_at unchanged" (omitted) apart from
+// "clear it" (null). Absent fields never invoke UnmarshalJSON, so Set stays
+// false; an explicit null sets Set with a nil Time.
+// Governing: SPEC-0020 REQ "Link Expiration" — "explicitly passing null on update MUST clear it"
+type OptionalTime struct {
+	Set  bool
+	Time *time.Time
+}
+
+// UnmarshalJSON implements tri-state decoding: present-null and present-value.
+func (o *OptionalTime) UnmarshalJSON(b []byte) error {
+	o.Set = true
+	if string(b) == "null" {
+		o.Time = nil
+		return nil
+	}
+	var t time.Time
+	if err := json.Unmarshal(b, &t); err != nil {
+		return err
+	}
+	o.Time = &t
+	return nil
+}
 
 // ErrorResponse is the standard error shape.
 type ErrorResponse struct {
@@ -18,6 +46,7 @@ type OwnerResponse struct {
 
 // LinkResponse is the full link resource.
 // Governing: SPEC-0005 REQ "API Response Structures", SPEC-0010 REQ "REST API Visibility Field"
+// Governing: SPEC-0020 REQ "Link Expiration" — expires_at is RFC 3339 or null (never expires)
 type LinkResponse struct {
 	ID          string          `json:"id"`
 	Slug        string          `json:"slug"`
@@ -25,6 +54,7 @@ type LinkResponse struct {
 	Title       string          `json:"title"`
 	Description string          `json:"description"`
 	Visibility  string          `json:"visibility"`
+	ExpiresAt   *time.Time      `json:"expires_at"`
 	Tags        []string        `json:"tags"`
 	Owners      []OwnerResponse `json:"owners"`
 	CreatedAt   time.Time       `json:"created_at"`
@@ -40,24 +70,28 @@ type LinkListResponse struct {
 
 // CreateLinkRequest is the body for POST /api/v1/links.
 // Governing: SPEC-0005 REQ "Links Collection", SPEC-0010 REQ "REST API Visibility Field"
+// Governing: SPEC-0020 REQ "Link Expiration" — omitting expires_at on create yields NULL
 type CreateLinkRequest struct {
-	Slug        string   `json:"slug"`
-	URL         string   `json:"url"`
-	Title       string   `json:"title,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Visibility  string   `json:"visibility,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
+	Slug        string     `json:"slug"`
+	URL         string     `json:"url"`
+	Title       string     `json:"title,omitempty"`
+	Description string     `json:"description,omitempty"`
+	Visibility  string     `json:"visibility,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	Tags        []string   `json:"tags,omitempty"`
 }
 
 // UpdateLinkRequest is the body for PUT /api/v1/links/{id}.
 // Governing: SPEC-0005 REQ "Link Resource" — slug is intentionally omitted (immutable).
 // Governing: SPEC-0010 REQ "REST API Visibility Field"
+// Governing: SPEC-0020 REQ "Link Expiration" — expires_at omitted = unchanged, null = clear
 type UpdateLinkRequest struct {
-	URL         string   `json:"url"`
-	Title       string   `json:"title,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Visibility  string   `json:"visibility,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
+	URL         string       `json:"url"`
+	Title       string       `json:"title,omitempty"`
+	Description string       `json:"description,omitempty"`
+	Visibility  string       `json:"visibility,omitempty"`
+	ExpiresAt   OptionalTime `json:"expires_at,omitempty" swaggertype:"string" format:"date-time" extensions:"x-nullable"`
+	Tags        []string     `json:"tags,omitempty"`
 }
 
 // AddOwnerRequest is the body for POST /api/v1/links/{id}/owners.

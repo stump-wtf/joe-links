@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/joestump/joe-links/internal/auth"
@@ -227,14 +228,31 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional expiration: omitted yields NULL (never expires); a past value
+	// is rejected before any row is written.
+	// Governing: SPEC-0020 REQ "Link Expiration" scenarios "Link Created with
+	// Expiration", "Past Expiration Rejected"
+	if err := store.ValidateExpiresAt(req.ExpiresAt, nil, time.Now().UTC()); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidExpiresAt)
+		return
+	}
+
 	// Create the link and its tags in a single transaction: if the tag write
 	// fails, no link row exists, so the client's retry cannot 409 on a
 	// half-created slug (issue #198).
 	// Governing: SPEC-0005 REQ "Links Collection" — link+tags create atomically; ADR-0018
-	link, err := h.links.CreateFull(r.Context(), req.Slug, req.URL, user.ID, req.Title, req.Description, visibility, req.Tags, nil, "")
+	link, err := h.links.CreateFull(r.Context(), req.Slug, req.URL, user.ID, req.Title, req.Description, visibility, req.ExpiresAt, req.Tags, nil, "")
 	if err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {
 			writeError(w, http.StatusConflict, "slug already exists", CodeSlugConflict)
+			return
+		}
+		// The store re-validates expires_at with a later clock than the handler
+		// check above; a value that expires inside the request window must still
+		// surface as a 400, not a 500.
+		// Governing: SPEC-0020 REQ "Link Expiration" scenario "Past Expiration Rejected"
+		if errors.Is(err, store.ErrExpiresAtInPast) {
+			writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidExpiresAt)
 			return
 		}
 		log.Printf("api: create link %q: %v", req.Slug, err)
@@ -402,8 +420,33 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 		visibility = req.Visibility
 	}
 
-	updated, err := h.links.Update(r.Context(), link.ID, req.URL, req.Title, req.Description, visibility)
+	// Expiration tri-state: omitted leaves the stored value unchanged (so a
+	// full-resource PUT round-tripping a past expires_at succeeds — expired
+	// links stay editable), explicit null clears it, and a NEW past value is
+	// rejected. Capability gating comes from requireOwnerOrAdmin above: share
+	// recipients never reach this write.
+	// Governing: SPEC-0020 REQ "Link Expiration" scenarios "Past Expiration
+	// Rejected", "Expired Link Stays Editable", "Expiration Cleared on Edit",
+	// "Share Recipient Cannot Set Expiry"
+	expiresAt := link.ExpiresAt
+	if req.ExpiresAt.Set {
+		expiresAt = req.ExpiresAt.Time
+	}
+	if err := store.ValidateExpiresAt(expiresAt, link.ExpiresAt, time.Now().UTC()); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidExpiresAt)
+		return
+	}
+
+	updated, err := h.links.Update(r.Context(), link.ID, req.URL, req.Title, req.Description, visibility, expiresAt)
 	if err != nil {
+		// The store re-validates expires_at with a later clock than the handler
+		// check above; a value that expires inside the request window must still
+		// surface as a 400, not a 500.
+		// Governing: SPEC-0020 REQ "Link Expiration" scenario "Past Expiration Rejected"
+		if errors.Is(err, store.ErrExpiresAtInPast) {
+			writeError(w, http.StatusBadRequest, err.Error(), CodeInvalidExpiresAt)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
 	}
@@ -710,6 +753,7 @@ func buildLinkResponse(ctx context.Context, links *store.LinkStore, ownership *s
 		Title:       link.Title,
 		Description: link.Description,
 		Visibility:  link.Visibility,
+		ExpiresAt:   link.ExpiresAt, // Governing: SPEC-0020 REQ "Link Expiration"
 		Tags:        tagNames,
 		Owners:      ownerResponses,
 		CreatedAt:   link.CreatedAt,

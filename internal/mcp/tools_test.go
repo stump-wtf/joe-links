@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/joestump/joe-links/internal/auth"
@@ -25,6 +26,7 @@ import (
 // fullEnv extends testEnv with every store, for tool tests.
 type fullEnv struct {
 	Handler      http.Handler
+	DB           *sqlx.DB
 	LinkStore    *store.LinkStore
 	TagStore     *store.TagStore
 	Ownership    *store.OwnershipStore
@@ -57,7 +59,7 @@ func newFullEnv(t *testing.T, suggester llm.Suggester) *fullEnv {
 		Suggester:      suggester,
 	}, bearer)
 
-	return &fullEnv{Handler: h, LinkStore: ls, TagStore: tags, Ownership: owns, UserStore: us, TokenStore: ts, KeywordStore: ks, ClickStore: cs}
+	return &fullEnv{Handler: h, DB: db, LinkStore: ls, TagStore: tags, Ownership: owns, UserStore: us, TokenStore: ts, KeywordStore: ks, ClickStore: cs}
 }
 
 func seedUserToken(t *testing.T, env *fullEnv, email string) (*store.User, string) {

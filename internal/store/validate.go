@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -65,6 +66,13 @@ var (
 	// destination can never resolve, so it is rejected as a typo (PR #280
 	// review follow-up).
 	ErrURLHostMissing = errors.New("url must include a host (e.g. https://example.com)")
+
+	// ErrExpiresAtInPast is returned when a create or update sets expires_at to
+	// a past timestamp that differs from the stored value. Immediate disabling
+	// is what archiving is for; a round-tripped stored value is not a change
+	// and is accepted, so expired links stay editable without renewing first.
+	// Governing: SPEC-0020 REQ "Link Expiration" scenario "Past Expiration Rejected"
+	ErrExpiresAtInPast = errors.New("expiration must be in the future")
 
 	// ErrTagNameInvalid is returned when a tag display name falls outside the
 	// safe charset. Defense in depth for the stored XSS class fixed at the
@@ -240,6 +248,52 @@ func ValidateTagNames(names []string) error {
 		if err := ValidateTagName(name); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// NormalizeExpiresAt returns expires_at truncated to whole seconds in UTC, or
+// nil unchanged. All write surfaces store second precision: MySQL TIMESTAMP is
+// second-granular anyway, and the web form's datetime-local input carries at
+// most seconds — normalizing at intake keeps a round-tripped value equal to
+// the stored one on every backend.
+// Governing: SPEC-0020 REQ "Link Expiration", ADR-0020
+func NormalizeExpiresAt(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	n := t.UTC().Truncate(time.Second)
+	return &n
+}
+
+// ExpiresAtEqual reports whether two normalized expiration values represent
+// the same instant (both nil, or both set and equal).
+func ExpiresAtEqual(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+// ValidateExpiresAt checks a new expires_at value against the stored one:
+// nil (never expires) is always valid; a value equal to the stored value is
+// not a change and is always valid — the edit form and any full-resource PUT
+// naturally round-trip the stored (possibly past) value, so expired links
+// remain editable; a NEW past value is rejected (immediate disabling is what
+// archiving is for). Pass stored == nil on create. Shared by the web forms,
+// REST API, and MCP tools so validation cannot diverge.
+// Governing: SPEC-0020 REQ "Link Expiration" scenarios "Past Expiration
+// Rejected", "Expired Link Stays Editable"
+func ValidateExpiresAt(newVal, stored *time.Time, now time.Time) error {
+	newVal = NormalizeExpiresAt(newVal)
+	if newVal == nil {
+		return nil
+	}
+	if ExpiresAtEqual(newVal, NormalizeExpiresAt(stored)) {
+		return nil
+	}
+	if !newVal.After(now) {
+		return ErrExpiresAtInPast
 	}
 	return nil
 }

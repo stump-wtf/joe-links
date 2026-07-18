@@ -24,6 +24,8 @@ definitions:
     properties:
       description:
         type: string
+      expires_at:
+        type: string
       slug:
         type: string
       tags:
@@ -65,6 +67,8 @@ definitions:
       created_at:
         type: string
       description:
+        type: string
+      expires_at:
         type: string
       id:
         type: string
@@ -209,6 +213,10 @@ definitions:
     properties:
       description:
         type: string
+      expires_at:
+        format: date-time
+        type: string
+        x-nullable: true
       tags:
         items:
           type: string

@@ -100,6 +100,21 @@
                 </select>
             </div>
 
+            <!-- Governing: SPEC-0020 REQ "Link Expiration" — optional expiration, empty by default -->
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text">Expires</span>
+                    <span class="label-text-alt text-base-content/50">optional, UTC</span>
+                </label>
+                <input
+                    type="datetime-local"
+                    name="expires_at"
+                    step="1"
+                    class="input input-bordered"
+                    value="{{.Form.ExpiresAt}}"
+                >
+            </div>
+
             <div class="form-control mb-6">
                 <label class="label">
                     <span class="label-text">Tags</span>
@@ -226,6 +241,21 @@ document.addEventListener('DOMContentLoaded', function() {
                     <option value="private" {{if eq .Form.Visibility "private"}}selected{{end}}>Private — hidden from browsing</option>
                     <option value="secure" {{if eq .Form.Visibility "secure"}}selected{{end}}>Secure — requires login + grant</option>
                 </select>
+            </div>
+
+            <!-- Governing: SPEC-0020 REQ "Link Expiration" — clearable on edit; stored value round-trips -->
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text">Expires</span>
+                    <span class="label-text-alt text-base-content/50">optional, UTC — clear to remove</span>
+                </label>
+                <input
+                    type="datetime-local"
+                    name="expires_at"
+                    step="1"
+                    class="input input-bordered"
+                    value="{{.Form.ExpiresAt}}"
+                >
             </div>
 
             <div class="form-control mb-6">

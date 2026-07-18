@@ -55,6 +55,7 @@ type linkPayload struct {
 	Title       string         `json:"title,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Visibility  string         `json:"visibility"`
+	ExpiresAt   *time.Time     `json:"expires_at,omitempty" jsonschema:"RFC 3339 expiration timestamp; absent means the link never expires"` // Governing: SPEC-0020 REQ "Link Expiration"
 	Tags        []string       `json:"tags,omitempty"`
 	Owners      []ownerPayload `json:"owners,omitempty"`
 	SharedWith  []string       `json:"shared_with,omitempty" jsonschema:"emails with share access; only populated for owners/admins"`
@@ -80,7 +81,7 @@ type listItemPayload struct {
 func registerTools(s *sdk.Server, deps Deps) {
 	addTool(s, &sdk.Tool{
 		Name:        "create_link",
-		Description: "Create a go-link. Defaults to private visibility; pass share_with emails to create a secure link shared with those users in one atomic call. Returns the working short URL.",
+		Description: "Create a go-link. Defaults to private visibility; pass share_with emails to create a secure link shared with those users in one atomic call. Optionally set a future expires_at (RFC 3339). Returns the working short URL.",
 	}, createLinkTool(deps))
 
 	addTool(s, &sdk.Tool{
@@ -95,7 +96,7 @@ func registerTools(s *sdk.Server, deps Deps) {
 
 	addTool(s, &sdk.Tool{
 		Name:        "update_link",
-		Description: "Update url, title, description, tags, or visibility on a link you own. Omitted fields are left unchanged; slug is immutable.",
+		Description: "Update url, title, description, tags, visibility, or expiration on a link you own. Omitted fields are left unchanged; slug is immutable. Pass expires_at as an empty string to clear the expiration.",
 	}, updateLinkTool(deps))
 
 	addTool(s, &sdk.Tool{
@@ -200,6 +201,7 @@ func buildLinkPayload(ctx context.Context, deps Deps, link *store.Link, includeS
 		Title:       link.Title,
 		Description: link.Description,
 		Visibility:  link.Visibility,
+		ExpiresAt:   link.ExpiresAt, // Governing: SPEC-0020 REQ "Link Expiration"
 		CreatedAt:   link.CreatedAt,
 		UpdatedAt:   link.UpdatedAt,
 	}
@@ -271,6 +273,21 @@ func internalError(action string, err error) *sdk.CallToolResult {
 	return errorResult(codeInternal, action+" failed")
 }
 
+// parseExpiresAtInput parses an RFC 3339 expires_at tool argument. An empty
+// string means "no expiration" (create) / "clear it" (update), returning nil.
+// Governing: SPEC-0020 REQ "Link Expiration"
+func parseExpiresAtInput(s string) (*time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return nil, fmt.Errorf("expires_at must be an RFC 3339 timestamp (e.g. 2030-01-02T15:04:05Z): %w", err)
+	}
+	return &t, nil
+}
+
 // --- create_link ----------------------------------------------------------
 
 type createLinkIn struct {
@@ -280,6 +297,7 @@ type createLinkIn struct {
 	Description string   `json:"description,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Visibility  string   `json:"visibility,omitempty" jsonschema:"public, private, or secure; defaults to private (secure when share_with is set)"`
+	ExpiresAt   string   `json:"expires_at,omitempty" jsonschema:"optional RFC 3339 expiration timestamp (must be in the future); omit for a link that never expires"` // Governing: SPEC-0020 REQ "Link Expiration"
 	ShareWith   []string `json:"share_with,omitempty" jsonschema:"emails of existing users to grant access; implies secure visibility unless overridden"`
 }
 
@@ -328,6 +346,18 @@ func createLinkTool(deps Deps) sdk.ToolHandlerFor[createLinkIn, *linkPayload] {
 			return errorResult(codeValidation, err.Error()), nil, nil
 		}
 
+		// Optional expiration: parsed and validated exactly like the REST API
+		// (a past value is rejected before any row is written).
+		// Governing: SPEC-0020 REQ "Link Expiration" scenarios "Link Created
+		// with Expiration", "Past Expiration Rejected"
+		expiresAt, err := parseExpiresAtInput(in.ExpiresAt)
+		if err != nil {
+			return errorResult(codeValidation, err.Error()), nil, nil
+		}
+		if err := store.ValidateExpiresAt(expiresAt, nil, time.Now().UTC()); err != nil {
+			return errorResult(codeValidation, err.Error()), nil, nil
+		}
+
 		shareIDs, denied := resolveEmails(ctx, deps, in.ShareWith)
 		if denied != nil {
 			return denied, nil, nil
@@ -335,10 +365,17 @@ func createLinkTool(deps Deps) sdk.ToolHandlerFor[createLinkIn, *linkPayload] {
 
 		// Atomic: link + owner + tags + shares in one transaction.
 		// Governing: SPEC-0018 REQ "Database Operation Standards"
-		link, err := deps.LinkStore.CreateFull(ctx, in.Slug, in.URL, user.ID, in.Title, in.Description, visibility, in.Tags, shareIDs, user.ID)
+		link, err := deps.LinkStore.CreateFull(ctx, in.Slug, in.URL, user.ID, in.Title, in.Description, visibility, expiresAt, in.Tags, shareIDs, user.ID)
 		if err != nil {
 			if errors.Is(err, store.ErrSlugTaken) {
 				return errorResult(codeDuplicateSlug, fmt.Sprintf("slug %q already exists", in.Slug)), nil, nil
+			}
+			// The store re-validates expires_at with a later clock than the
+			// check above; a value that expires inside the request window must
+			// still surface as a validation error, not an internal one.
+			// Governing: SPEC-0020 REQ "Link Expiration" scenario "Past Expiration Rejected"
+			if errors.Is(err, store.ErrExpiresAtInPast) {
+				return errorResult(codeValidation, err.Error()), nil, nil
 			}
 			return internalError("create link", err), nil, nil
 		}
@@ -482,6 +519,7 @@ type updateLinkIn struct {
 	Description *string   `json:"description,omitempty"`
 	Tags        *[]string `json:"tags,omitempty" jsonschema:"replaces the full tag set; [] clears all tags"`
 	Visibility  *string   `json:"visibility,omitempty" jsonschema:"public, private, or secure"`
+	ExpiresAt   *string   `json:"expires_at,omitempty" jsonschema:"RFC 3339 expiration timestamp; empty string clears the expiration; omitted leaves it unchanged"` // Governing: SPEC-0020 REQ "Link Expiration"
 }
 
 func updateLinkTool(deps Deps) sdk.ToolHandlerFor[updateLinkIn, *linkPayload] {
@@ -533,6 +571,25 @@ func updateLinkTool(deps Deps) sdk.ToolHandlerFor[updateLinkIn, *linkPayload] {
 			return errorResult(codeValidation, err.Error()), nil, nil
 		}
 
+		// Expiration overlay: omitted leaves the stored value unchanged, an
+		// empty string clears it, and a NEW past value is rejected — identical
+		// validation to PUT /api/v1/links/{id}. Capability gating comes from
+		// the owner/admin check above: share recipients never reach this write.
+		// Governing: SPEC-0020 REQ "Link Expiration" scenarios "Past Expiration
+		// Rejected", "Expired Link Stays Editable", "Expiration Cleared on
+		// Edit", "Share Recipient Cannot Set Expiry"
+		expiresAt := link.ExpiresAt
+		if in.ExpiresAt != nil {
+			parsed, err := parseExpiresAtInput(*in.ExpiresAt)
+			if err != nil {
+				return errorResult(codeValidation, err.Error()), nil, nil
+			}
+			expiresAt = parsed
+		}
+		if err := store.ValidateExpiresAt(expiresAt, link.ExpiresAt, time.Now().UTC()); err != nil {
+			return errorResult(codeValidation, err.Error()), nil, nil
+		}
+
 		// Validate the raw tag list BEFORE the row update so a hostile tag
 		// name cannot leave the link half-updated, and before deduping so the
 		// count cap and empty-entry rejection see the same raw input as
@@ -557,8 +614,15 @@ func updateLinkTool(deps Deps) sdk.ToolHandlerFor[updateLinkIn, *linkPayload] {
 			}
 		}
 
-		updated, err := deps.LinkStore.Update(ctx, link.ID, url, title, description, visibility)
+		updated, err := deps.LinkStore.Update(ctx, link.ID, url, title, description, visibility, expiresAt)
 		if err != nil {
+			// The store re-validates expires_at with a later clock than the
+			// check above; a value that expires inside the request window must
+			// still surface as a validation error, not an internal one.
+			// Governing: SPEC-0020 REQ "Link Expiration" scenario "Past Expiration Rejected"
+			if errors.Is(err, store.ErrExpiresAtInPast) {
+				return errorResult(codeValidation, err.Error()), nil, nil
+			}
 			return internalError("update link", err), nil, nil
 		}
 

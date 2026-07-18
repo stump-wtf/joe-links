@@ -1421,6 +1421,9 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "expires_at": {
+                    "type": "string"
+                },
                 "slug": {
                     "type": "string"
                 },
@@ -1484,6 +1487,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "description": {
+                    "type": "string"
+                },
+                "expires_at": {
                     "type": "string"
                 },
                 "id": {
@@ -1705,6 +1711,11 @@ const docTemplate = `{
             "properties": {
                 "description": {
                     "type": "string"
+                },
+                "expires_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "x-nullable": true
                 },
                 "tags": {
                     "type": "array",

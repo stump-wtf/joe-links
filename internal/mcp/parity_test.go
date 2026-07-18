@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joestump/joe-links/internal/api"
 	"github.com/joestump/joe-links/internal/auth"
@@ -112,6 +113,7 @@ func TestAuthorizationParityWithREST(t *testing.T) {
 	expected := map[string][]bool{
 		"read":          {true, true, true, false, true},
 		"update":        {true, true, false, false, true},
+		"update-expiry": {true, true, false, false, true},
 		"stats":         {true, true, true, false, true},
 		"clicks":        {true, true, true, false, true},
 		"manage-shares": {true, true, false, false, true},
@@ -126,7 +128,7 @@ func TestAuthorizationParityWithREST(t *testing.T) {
 		seq++
 		slug := fmt.Sprintf("parity-%d", seq)
 		link, err := env.LinkStore.CreateFull(ctx, slug, "https://example.com/"+slug,
-			owner.ID, "Parity", "", "secure", nil, []string{recipient.ID}, owner.ID)
+			owner.ID, "Parity", "", "secure", nil, nil, []string{recipient.ID}, owner.ID)
 		if err != nil {
 			t.Fatalf("seed link: %v", err)
 		}
@@ -169,6 +171,24 @@ func TestAuthorizationParityWithREST(t *testing.T) {
 			rest: func(t *testing.T, tok string, l *store.Link) int {
 				return restCall(t, env, tok, http.MethodPut, "/links/"+l.ID,
 					map[string]any{"url": l.URL, "title": "changed"})
+			},
+		},
+		{
+			// Setting expires_at is an edit (LinkCaps.CanEdit): owners,
+			// co-owners, and admins may; share recipients may not — on both
+			// surfaces identically.
+			// Governing: SPEC-0020 REQ "Link Expiration" scenario "Share
+			// Recipient Cannot Set Expiry"
+			name: "update-expiry",
+			mcp: func(t *testing.T, tok string, l *store.Link) bool {
+				return mcpAllowed(t, tok, "update_link", map[string]any{
+					"link": l.ID, "expires_at": time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339),
+				})
+			},
+			rest: func(t *testing.T, tok string, l *store.Link) int {
+				return restCall(t, env, tok, http.MethodPut, "/links/"+l.ID, map[string]any{
+					"url": l.URL, "expires_at": time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339),
+				})
 			},
 		},
 		{

@@ -14,14 +14,50 @@ import (
 
 // Link represents a row in the links table.
 type Link struct {
-	ID          string    `db:"id"`
-	Slug        string    `db:"slug"`
-	URL         string    `db:"url"`
-	Title       string    `db:"title"`
-	Description string    `db:"description"`
-	Visibility  string    `db:"visibility"` // Governing: SPEC-0010 REQ "Visibility Column on Links Table"
-	CreatedAt   time.Time `db:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at"`
+	ID          string     `db:"id"`
+	Slug        string     `db:"slug"`
+	URL         string     `db:"url"`
+	Title       string     `db:"title"`
+	Description string     `db:"description"`
+	Visibility  string     `db:"visibility"` // Governing: SPEC-0010 REQ "Visibility Column on Links Table"
+	ExpiresAt   *time.Time `db:"expires_at"`  // Governing: SPEC-0020 REQ "Link Expiration" — NULL means never expires
+	ArchivedAt  *time.Time `db:"archived_at"` // Governing: SPEC-0020 REQ "Archive State" — NULL means not archived
+	CreatedAt   time.Time  `db:"created_at"`
+	UpdatedAt   time.Time  `db:"updated_at"`
+}
+
+// Derived lifecycle states. Lifecycle state is computed from the two nullable
+// timestamps at read time — there is no status column (ADR-0020).
+// Governing: SPEC-0020, ADR-0020
+const (
+	LifecycleActive   = "active"
+	LifecycleExpired  = "expired"
+	LifecycleArchived = "archived"
+)
+
+// IsExpired reports whether the link's expires_at is set and has passed.
+// Governing: SPEC-0020 REQ "Link Expiration" — expiry is derived at read time
+func (l *Link) IsExpired(now time.Time) bool {
+	return l.ExpiresAt != nil && !l.ExpiresAt.After(now)
+}
+
+// IsArchived reports whether the link is archived (archived_at set).
+// Governing: SPEC-0020 REQ "Archive State"
+func (l *Link) IsArchived() bool { return l.ArchivedAt != nil }
+
+// LifecycleState derives the link's lifecycle state: archived when archived_at
+// is set (archived wins when both apply), else expired when expires_at <= now,
+// else active.
+// Governing: SPEC-0020 REQ "Archive State" scenario "Archived Beats Expired in Derived State", ADR-0020
+func (l *Link) LifecycleState(now time.Time) string {
+	switch {
+	case l.IsArchived():
+		return LifecycleArchived
+	case l.IsExpired(now):
+		return LifecycleExpired
+	default:
+		return LifecycleActive
+	}
 }
 
 // ShareRecord represents a row in the link_shares table.
@@ -118,7 +154,8 @@ func (s *LinkStore) Create(ctx context.Context, slug, url, ownerID, title, descr
 // of the same tag cannot violate the link_tags primary key and roll back the
 // write. Share user IDs must be pre-resolved to existing users by the caller.
 // Governing: SPEC-0018 REQ "Database Operation Standards", ADR-0018
-func (s *LinkStore) CreateFull(ctx context.Context, slug, url, ownerID, title, description, visibility string, tagNames, shareUserIDs []string, sharedBy string) (*Link, error) {
+// Governing: SPEC-0020 REQ "Link Expiration" — optional expires_at persisted at create
+func (s *LinkStore) CreateFull(ctx context.Context, slug, url, ownerID, title, description, visibility string, expiresAt *time.Time, tagNames, shareUserIDs []string, sharedBy string) (*Link, error) {
 	// Governing: SPEC-0002 REQ "Links Table" — reject over-length title/description before insert
 	if err := ValidateLinkText(title, description); err != nil {
 		return nil, err
@@ -138,6 +175,12 @@ func (s *LinkStore) CreateFull(ctx context.Context, slug, url, ownerID, title, d
 	if err := ValidateTagNames(tagNames); err != nil {
 		return nil, err
 	}
+	// A new past expiration must never be persisted (create has no stored value).
+	// Governing: SPEC-0020 REQ "Link Expiration" scenario "Past Expiration Rejected"
+	if err := ValidateExpiresAt(expiresAt, nil, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	expiresAt = NormalizeExpiresAt(expiresAt)
 	if visibility == "" {
 		visibility = "public"
 	}
@@ -151,9 +194,9 @@ func (s *LinkStore) CreateFull(ctx context.Context, slug, url, ownerID, title, d
 	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx, tx.Rebind(`
-		INSERT INTO links (id, slug, url, title, description, visibility, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`), id, slug, url, title, description, visibility, now, now)
+		INSERT INTO links (id, slug, url, title, description, visibility, expires_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`), id, slug, url, title, description, visibility, expiresAt, now, now)
 	if err != nil {
 		if isUniqueConstraintError(err) {
 			return nil, ErrSlugTaken
@@ -377,10 +420,14 @@ func (s *LinkStore) ListByOwnerAndTag(ctx context.Context, ownerID, tagSlug stri
 	return links, nil
 }
 
-// Update modifies an existing link's url, title, description, and visibility.
+// Update modifies an existing link's url, title, description, visibility, and
+// expiration. Callers pass the final desired expires_at (overlaying the stored
+// value themselves when the surface treats "omitted" as "unchanged"); nil
+// clears it.
 // Governing: SPEC-0001 REQ "Short Link Management" — slug is immutable after creation.
 // Governing: SPEC-0010 REQ "Visibility Selector in Link Forms"
-func (s *LinkStore) Update(ctx context.Context, id, url, title, description, visibility string) (*Link, error) {
+// Governing: SPEC-0020 REQ "Link Expiration" — set/clear/validate lives in the store layer
+func (s *LinkStore) Update(ctx context.Context, id, url, title, description, visibility string, expiresAt *time.Time) (*Link, error) {
 	// Governing: SPEC-0002 REQ "Links Table" — reject over-length title/description before update
 	if err := ValidateLinkText(title, description); err != nil {
 		return nil, err
@@ -389,10 +436,23 @@ func (s *LinkStore) Update(ctx context.Context, id, url, title, description, vis
 	if err := ValidateLinkURL(url); err != nil {
 		return nil, err
 	}
+	// Expiration backstop: a NEW past value is rejected; the stored value
+	// round-tripped unchanged (as the edit form and full-resource PUTs do) is
+	// accepted, so expired links stay editable (SPEC-0020).
+	// Governing: SPEC-0020 REQ "Link Expiration" scenarios "Past Expiration
+	// Rejected", "Expired Link Stays Editable", "Expiration Cleared on Edit"
+	stored, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateExpiresAt(expiresAt, stored.ExpiresAt, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	expiresAt = NormalizeExpiresAt(expiresAt)
 	now := time.Now().UTC()
-	_, err := s.db.ExecContext(ctx, s.q(`
-		UPDATE links SET url = ?, title = ?, description = ?, visibility = ?, updated_at = ? WHERE id = ?
-	`), url, title, description, visibility, now, id)
+	_, err = s.db.ExecContext(ctx, s.q(`
+		UPDATE links SET url = ?, title = ?, description = ?, visibility = ?, expires_at = ?, updated_at = ? WHERE id = ?
+	`), url, title, description, visibility, expiresAt, now, id)
 	if err != nil {
 		return nil, err
 	}

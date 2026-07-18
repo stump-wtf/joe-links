@@ -109,7 +109,7 @@ func TestLinkStore_CreateFull_RejectsHostileTagName_NoHalfCreatedLink(t *testing
 	ls, _, userID := newHardeningEnv(t)
 	ctx := context.Background()
 
-	_, err := ls.CreateFull(ctx, "doomed", "https://example.com", userID, "", "", "public",
+	_, err := ls.CreateFull(ctx, "doomed", "https://example.com", userID, "", "", "public", nil,
 		[]string{`x');fetch('/evil')//`}, nil, "")
 	if !errors.Is(err, store.ErrTagNameInvalid) {
 		t.Fatalf("CreateFull hostile tag = %v, want ErrTagNameInvalid", err)
@@ -134,10 +134,10 @@ func TestLinkStore_WritePaths_RejectNonHTTPSchemes(t *testing.T) {
 		if _, err := ls.Create(ctx, "bad-create", badURL, userID, "", "", ""); !errors.Is(err, store.ErrURLSchemeInvalid) {
 			t.Errorf("Create(%q) = %v, want ErrURLSchemeInvalid", badURL, err)
 		}
-		if _, err := ls.CreateFull(ctx, "bad-createfull", badURL, userID, "", "", "public", nil, nil, ""); !errors.Is(err, store.ErrURLSchemeInvalid) {
+		if _, err := ls.CreateFull(ctx, "bad-createfull", badURL, userID, "", "", "public", nil, nil, nil, ""); !errors.Is(err, store.ErrURLSchemeInvalid) {
 			t.Errorf("CreateFull(%q) = %v, want ErrURLSchemeInvalid", badURL, err)
 		}
-		if _, err := ls.Update(ctx, link.ID, badURL, "", "", "public"); !errors.Is(err, store.ErrURLSchemeInvalid) {
+		if _, err := ls.Update(ctx, link.ID, badURL, "", "", "public", nil); !errors.Is(err, store.ErrURLSchemeInvalid) {
 			t.Errorf("Update(%q) = %v, want ErrURLSchemeInvalid", badURL, err)
 		}
 	}

@@ -99,6 +99,21 @@
                             </select>
                         </div>
 
+                        <!-- Governing: SPEC-0020 REQ "Link Expiration" — optional expiration, empty by default -->
+                        <div class="form-control mb-4">
+                            <label class="label">
+                                <span class="label-text">Expires</span>
+                                <span class="label-text-alt text-base-content/50">optional, UTC</span>
+                            </label>
+                            <input
+                                type="datetime-local"
+                                name="expires_at"
+                                step="1"
+                                class="input input-bordered"
+                                value="{{.Form.ExpiresAt}}"
+                            >
+                        </div>
+
                         <!-- Governing: SPEC-0004 REQ "New Link Form" — tag input with autocomplete -->
                         <div class="form-control mb-6">
                             <label class="label">

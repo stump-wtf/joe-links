@@ -16,6 +16,7 @@ const (
 	CodeInvalidFieldLength    = "INVALID_FIELD_LENGTH"
 	CodeInvalidVisibility     = "INVALID_VISIBILITY"
 	CodeInvalidTagName        = "INVALID_TAG_NAME"
+	CodeInvalidExpiresAt      = "INVALID_EXPIRES_AT" // Governing: SPEC-0020 REQ "Link Expiration"
 	CodeTooManyTags           = "TOO_MANY_TAGS"
 	CodeSlugConflict          = "SLUG_CONFLICT"
 	CodeDBBusy                = "DB_BUSY"
