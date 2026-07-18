@@ -11,6 +11,13 @@
                  link's visibility so owners can tell secure/private from public at a
                  glance (issue #206); colors match the shared link_row partial. -->
             <span class="badge {{if eq .Link.Visibility "secure"}}badge-error{{else if eq .Link.Visibility "private"}}badge-warning{{else}}badge-ghost{{end}}">{{.Link.Visibility}}</span>
+            <!-- Governing: SPEC-0020 REQ "Expired Link Resolution", REQ "Archived
+                 Link Resolution" — lifecycle badge on the detail surface; state is
+                 derived at render time and archived wins when both apply (ADR-0020).
+                 Colors match the shared link_row partial. -->
+            {{$lifecycle := .Link.LifecycleState now}}
+            {{if eq $lifecycle "archived"}}<span class="badge badge-neutral">archived</span>
+            {{else if eq $lifecycle "expired"}}<span class="badge badge-warning">expired</span>{{end}}
         </div>
         <div class="flex gap-2">
             <a href="/dashboard/links/{{.Link.ID}}/stats" class="btn btn-sm btn-ghost">Stats</a>

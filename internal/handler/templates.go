@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/joestump/joe-links/internal/build"
 	"github.com/joestump/joe-links/internal/store"
@@ -36,6 +37,11 @@ var templateFuncs = template.FuncMap{
 		}
 		return m, nil
 	},
+	// now returns the current UTC time so templates can derive lifecycle
+	// state at render time ({{$l.LifecycleState now}}) — lifecycle is a
+	// function of the timestamps, never a stored status (ADR-0020).
+	// Governing: SPEC-0020 REQ "Expired Link Resolution" scenario "Owner Sees Expired Badge on Dashboard"
+	"now": func() time.Time { return time.Now().UTC() },
 }
 
 // BasePage carries layout-level data available to every template.

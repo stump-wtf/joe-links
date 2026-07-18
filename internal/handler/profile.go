@@ -31,6 +31,11 @@ type ProfilePage struct {
 	ShowTags       bool
 	ShowVisibility bool
 	ShowActions    bool
+	// ShowLifecycle stays false: public profile pages must not disclose
+	// expired/archived state — SPEC-0020 excludes those links from this
+	// surface entirely (exclusion lands with #274).
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report", Security "Resolution Ordering and Oracle Resistance"
+	ShowLifecycle bool
 }
 
 // ProfileHandler provides HTTP handlers for public user profile pages.

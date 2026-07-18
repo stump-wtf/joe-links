@@ -29,6 +29,10 @@ type DashboardPage struct {
 	ShowTags       bool // show Tags column
 	ShowVisibility bool // show Visibility column
 	ShowActions    bool // show the actions column at all
+	// ShowLifecycle gates the expired/archived badge to capability surfaces —
+	// public browser and profile pages must not disclose lifecycle state.
+	// Governing: SPEC-0020 REQ "Expired Link Resolution", REQ "Health Badges and Admin Report"
+	ShowLifecycle bool
 	// RowCaps maps link ID → the viewer's capabilities for that row, so lists
 	// mixing rows with differing rights (e.g. ?filter=shared) never render
 	// dead action buttons.
@@ -131,7 +135,11 @@ func (h *DashboardHandler) Show(w http.ResponseWriter, r *http.Request) {
 		// a glance (issue #206).
 		ShowVisibility: true,
 		ShowActions:    true,
-		RowCaps:        rowCaps,
+		// Governing: SPEC-0020 REQ "Expired Link Resolution" scenario "Owner
+		// Sees Expired Badge on Dashboard" — the dashboard is a capability
+		// surface; lifecycle badges render here.
+		ShowLifecycle: true,
+		RowCaps:       rowCaps,
 	}
 
 	if isHTMX(r) {

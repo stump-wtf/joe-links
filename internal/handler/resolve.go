@@ -5,6 +5,7 @@
 // Governing: SPEC-0010 REQ "Secure Link Resolution", REQ "Public Link Resolution", REQ "Private Link Resolution", ADR-0014
 // Governing: SPEC-0016 REQ "Click Recording", REQ "Prometheus Metrics Endpoint", ADR-0016
 // Governing: SPEC-0019 REQ "Case-Insensitive Slug Resolution", REQ "Slug Normalization Forgiveness", ADR-0019
+// Governing: SPEC-0020 REQ "Expired Link Resolution", REQ "Archived Link Resolution", ADR-0020
 package handler
 
 import (
@@ -142,6 +143,12 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 		if !h.checkVisibility(w, r, link) {
 			return
 		}
+		// Lifecycle runs strictly after the visibility gate so no expired or
+		// archived rendering can become an existence oracle for secure slugs.
+		// Governing: SPEC-0020 Security "Resolution Ordering and Oracle Resistance", ADR-0020
+		if !h.checkLifecycle(w, r, link) {
+			return
+		}
 		// A variable link visited with no variable segments would redirect to
 		// the literal placeholder URL (e.g. https://.../browse/$ticket). Treat
 		// it as an arity mismatch (zero provided), consistent with Step 2.
@@ -178,6 +185,15 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 
 			// Governing: SPEC-0010 REQ "Secure Link Resolution"
 			if !h.checkVisibility(w, r, link) {
+				return
+			}
+
+			// An expired or archived prefix match terminates resolution — the
+			// resolver commits to the first visibility-passing match and never
+			// falls through to shorter prefixes, preserving today's
+			// stop-at-first-visible-match semantics.
+			// Governing: SPEC-0020 REQ "Expired Link Resolution" scenario "Expired Prefix Match Terminates Resolution"
+			if !h.checkLifecycle(w, r, link) {
 				return
 			}
 
@@ -313,6 +329,87 @@ func (h *ResolveHandler) checkVisibility(w http.ResponseWriter, r *http.Request,
 		// Unknown visibility — treat as public
 		return true
 	}
+}
+
+// checkLifecycle enforces the link's derived lifecycle state. It MUST be
+// called only after checkVisibility has passed: the visibility gate runs
+// first for every path (exact match, prefix resolution, HEAD), so a secure
+// link's login redirect / 403 is byte-identical whether or not the link is
+// expired or archived and no lifecycle response can become an existence
+// oracle. Returns true when the link is active and resolution may proceed;
+// returns false after writing the terminal lifecycle response. Neither
+// terminal outcome redirects or records a click event.
+// Governing: SPEC-0020 REQ "Expired Link Resolution", REQ "Archived Link Resolution", ADR-0020
+// Governing: SPEC-0020 Security "Resolution Ordering and Oracle Resistance"
+func (h *ResolveHandler) checkLifecycle(w http.ResponseWriter, r *http.Request, link *store.Link) bool {
+	// Archived wins when both archived_at and a past expires_at apply.
+	// Governing: SPEC-0020 REQ "Archived Link Resolution" scenario "Archived Beats Expired in Derived State"
+	switch link.LifecycleState(time.Now().UTC()) {
+	case store.LifecycleArchived:
+		// Archived presents as gone: the standard 404 page (never 410), minus
+		// the Create CTA — the slug stays reserved by the archived row. The
+		// page names the matched slug so a prefix match reads like an exact
+		// match instead of naming the full requested path.
+		// Governing: SPEC-0020 REQ "Archived Link Resolution"
+		metrics.RedirectsTotal.WithLabelValues("not_found").Inc()
+		h.render404(w, r, link.Slug, false)
+		return false
+	case store.LifecycleExpired:
+		// Governing: SPEC-0020 REQ "Expired Link Resolution"
+		metrics.RedirectsTotal.WithLabelValues("not_found").Inc()
+		h.renderExpired(w, r, link)
+		return false
+	}
+	return true
+}
+
+// expiredPage is the template data for the "this link has expired" page.
+// Governing: SPEC-0020 REQ "Expired Link Resolution"
+type expiredPage struct {
+	BasePage
+	User *store.User
+	Slug string
+	// OwnerName/OwnerSlug identify the link's primary owner. Populated only
+	// when the link is public or the viewer holds CanView — other viewers of
+	// a private expired link get no owner identity.
+	OwnerName string
+	OwnerSlug string
+}
+
+// renderExpired renders the styled expired page for a link whose derived
+// state is expired. The status is 404 Not Found — never 410 Gone — so the
+// status-code surface cannot distinguish "existed once" from "never existed"
+// (ADR-0020). The owner is named (linking to their public profile, SPEC-0012)
+// only when the link's visibility is public or the viewer holds CanView on
+// the link. The page never offers the 404 page's Create CTA: the slug remains
+// reserved by the expired link.
+// Governing: SPEC-0020 REQ "Expired Link Resolution", ADR-0020
+func (h *ResolveHandler) renderExpired(w http.ResponseWriter, r *http.Request, link *store.Link) {
+	user := auth.UserFromContext(r.Context())
+
+	showOwner := link.Visibility == "public"
+	if !showOwner && user != nil {
+		if caps, err := store.LinkCapsFor(r.Context(), h.ownership, h.links, link.ID, user); err == nil && caps.CanView {
+			showOwner = true
+		}
+	}
+	ownerName, ownerSlug := "", ""
+	if showOwner {
+		// ListOwnerUsers orders the primary owner first (SPEC-0002).
+		if owners, err := h.ownership.ListOwnerUsers(link.ID); err == nil && len(owners) > 0 {
+			ownerName = owners[0].DisplayName
+			ownerSlug = owners[0].DisplayNameSlug
+		}
+	}
+
+	w.WriteHeader(http.StatusNotFound)
+	data := expiredPage{BasePage: newBasePage(r, user), User: user, Slug: link.Slug, OwnerName: ownerName, OwnerSlug: ownerSlug}
+	// Governing: SPEC-0020 REQ "Expired Link Resolution" — HX-Request renders the same content as a fragment (SPEC-0004 conventions)
+	if isHTMX(r) {
+		renderPageFragment(w, "expired.html", "content", data)
+		return
+	}
+	render(w, "expired.html", data)
 }
 
 // redirect issues a 302 redirect, handling HTMX requests with HX-Redirect header.

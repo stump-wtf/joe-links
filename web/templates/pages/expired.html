@@ -1,0 +1,27 @@
+{{template "base" .}}
+
+{{define "title"}}Not Found — Joe Links{{end}}
+
+{{define "content"}}
+<!-- Governing: SPEC-0020 REQ "Expired Link Resolution" — 404 status (never 410),
+     names the requested slug, owner attribution only when the link is public or
+     the viewer holds CanView (OwnerName is gated server-side), and no Create
+     CTA: the slug stays reserved by the expired link. The title matches the
+     generic 404 page so the response surface stays uniform (Security REQ
+     "Resolution Ordering and Oracle Resistance"). -->
+<div class="hero py-24">
+    <div class="hero-content text-center">
+        <div>
+            <h1 class="text-5xl font-bold mb-4">404</h1>
+            <h2 class="text-2xl font-semibold mb-2">Link expired: <span class="font-mono">{{.Slug}}</span></h2>
+            <p class="text-base-content/60 mb-6">
+                The short link <span class="font-mono font-semibold">{{.Slug}}</span> has expired and no longer redirects.
+                {{if .OwnerName}}
+                It is owned by
+                {{if .OwnerSlug}}<a href="/u/{{.OwnerSlug}}" class="link link-primary">{{.OwnerName}}</a>{{else}}{{.OwnerName}}{{end}}.
+                {{end}}
+            </p>
+        </div>
+    </div>
+</div>
+{{end}}

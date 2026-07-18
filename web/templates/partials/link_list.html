@@ -65,6 +65,22 @@
                     <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                 </svg>
             </button>
+            {{- /* Lifecycle badge, derived at render time from the two nullable
+                 timestamps — archived wins when both apply. Gated on
+                 Ctx.ShowLifecycle, set only by capability surfaces (dashboard,
+                 admin, tag detail): SPEC-0020 excludes expired/archived links
+                 from the public browser and profile pages entirely (REQ
+                 "Health Badges and Admin Report" — the exclusion itself lands
+                 with #274), so those surfaces must never disclose lifecycle
+                 state to anonymous visitors in the interim.
+                 Governing: SPEC-0020 REQ "Expired Link Resolution" scenario
+                 "Owner Sees Expired Badge on Dashboard", REQ "Archived Link
+                 Resolution", ADR-0020 */ -}}
+            {{- if $ctx.ShowLifecycle -}}
+            {{- $state := $l.LifecycleState now -}}
+            {{if eq $state "archived"}}<span class="badge badge-sm badge-neutral">archived</span>
+            {{- else if eq $state "expired"}}<span class="badge badge-sm badge-warning">expired</span>{{end}}
+            {{- end}}
         </div>
     </td>
     <td class="max-w-xs truncate text-sm text-base-content/70">

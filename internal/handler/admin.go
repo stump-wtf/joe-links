@@ -58,6 +58,9 @@ type AdminLinksPage struct {
 	ShowTags       bool   // show Tags column
 	ShowVisibility bool   // show Visibility column
 	ShowActions    bool   // show Edit/Delete action buttons
+	// ShowLifecycle gates the expired/archived badge to capability surfaces.
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+	ShowLifecycle bool
 }
 
 // AdminLinkRowData wraps a single admin link with the display context the shared
@@ -82,6 +85,7 @@ func adminLinkRowData(r *http.Request, link *store.AdminLink) AdminLinkRowData {
 			ShowTags:       true,
 			ShowVisibility: true,
 			ShowActions:    true,
+			ShowLifecycle:  true,
 		},
 	}
 }
@@ -160,6 +164,7 @@ func (h *AdminHandler) Links(w http.ResponseWriter, r *http.Request) {
 		ShowTags:       true,
 		ShowVisibility: true,
 		ShowActions:    true,
+		ShowLifecycle:  true,
 	}
 	if isHTMX(r) {
 		renderPageFragment(w, "admin/links.html", "admin_link_list", data)

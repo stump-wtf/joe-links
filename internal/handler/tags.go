@@ -40,6 +40,9 @@ type TagDetailPage struct {
 	ShowTitle      bool
 	ShowOwner      bool
 	ShowTags       bool
+	// ShowLifecycle gates the expired/archived badge to capability surfaces.
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+	ShowLifecycle bool
 	// RowCaps maps link ID → the viewer's capabilities for that row; tag lists
 	// show all visible links, and visible ≠ editable.
 	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
@@ -123,7 +126,10 @@ func (h *TagsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		ShowTitle:      true,
 		ShowOwner:      false,
 		ShowTags:       false,
-		RowCaps:        rowCaps,
+		// The tag browser is authenticated (/dashboard/tags/*) — a capability
+		// surface under SPEC-0010's list filtering, so lifecycle badges render.
+		ShowLifecycle: true,
+		RowCaps:       rowCaps,
 	}
 	if isHTMX(r) {
 		renderPageFragment(w, "tags/detail.html", "content", data)

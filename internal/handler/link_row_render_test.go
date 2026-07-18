@@ -206,6 +206,44 @@ func TestLinkListEmptyState_AllPageStructs(t *testing.T) {
 	}
 }
 
+// The lifecycle badge is gated on Ctx.ShowLifecycle: capability surfaces
+// (dashboard, admin, tag detail) render it; the anonymous public browser and
+// profile pages must not — SPEC-0020 excludes expired/archived links from
+// those surfaces entirely (the exclusion itself is #274), so leaking the badge
+// there would disclose exactly what the archived 404 path hides.
+// Governing: SPEC-0020 REQ "Health Badges and Admin Report", Security "Resolution Ordering and Oracle Resistance"
+func TestLifecycleBadge_GatedToCapabilitySurfaces(t *testing.T) {
+	archived := sampleAdminLink()
+	past := time.Now().UTC().Add(-time.Hour)
+	archived.ArchivedAt = &past
+
+	cases := []struct {
+		name      string
+		ctx       any
+		wantBadge bool
+	}{
+		{"dashboard shows badge", DashboardPage{ShowVisibility: true, ShowLifecycle: true}, true},
+		{"admin shows badge", AdminLinksPage{ShowVisibility: true, ShowLifecycle: true}, true},
+		{"tag detail shows badge", TagDetailPage{ShowVisibility: true, ShowLifecycle: true}, true},
+		{"public browser hides badge", PublicLinksPage{ShowVisibility: true}, false},
+		{"profile hides badge", ProfilePage{ShowVisibility: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			renderFragment(rr, "link_row", map[string]any{"Link": archived, "Ctx": tc.ctx})
+			body := rr.Body.String()
+			if strings.Contains(body, "template error") {
+				t.Fatalf("link_row crashed: %s", body)
+			}
+			got := strings.Contains(body, ">archived</span>")
+			if got != tc.wantBadge {
+				t.Errorf("archived badge rendered = %v, want %v; body=%s", got, tc.wantBadge, body)
+			}
+		})
+	}
+}
+
 // Governing: SPEC-0014 — the dashboard renders link_list with []*store.Link (no
 // AdminLink owner/tag fields). Guards must keep those fields un-evaluated so the
 // dashboard never 500s on the shared partial.
