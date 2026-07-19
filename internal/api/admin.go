@@ -197,7 +197,10 @@ func (h *adminAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 	// other link endpoint; the previous hand-built response omitted visibility.
 	resp := &LinkListResponse{Links: make([]*LinkResponse, 0, len(links)), NextCursor: nextCursor}
 	for _, l := range links {
-		lr, err := buildLinkResponse(r.Context(), h.links, h.ownership, l)
+		// Admin callers hold capabilities on every link, so the health object
+		// is included on each row.
+		// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+		lr, err := buildLinkResponse(r.Context(), h.links, h.ownership, l, true)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return

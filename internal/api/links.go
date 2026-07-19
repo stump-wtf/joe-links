@@ -92,9 +92,22 @@ func (h *linksAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
 		}
+		// The ?url= lookup can return public links the caller holds no
+		// capabilities on, so the health object is capability-gated per row.
+		// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" scenario
+		// "Non-Capable Caller Gets No Health Data"
+		ids := make([]string, len(links))
+		for i, l := range links {
+			ids[i] = l.ID
+		}
+		rowCaps, err := store.LinkCapsForAll(r.Context(), h.ownership, h.links, ids, user)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
+			return
+		}
 		resp := &LinkListResponse{Links: make([]*LinkResponse, 0, len(links))}
 		for _, l := range links {
-			lr, err := h.toLinkResponse(r.Context(), l)
+			lr, err := h.toLinkResponse(r.Context(), l, rowCaps[l.ID].CanView)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 				return
@@ -128,7 +141,11 @@ func (h *linksAPIHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	resp := &LinkListResponse{Links: make([]*LinkResponse, 0, len(links)), NextCursor: nextCursor}
 	for _, l := range links {
-		lr, err := h.toLinkResponse(r.Context(), l)
+		// Every row here is owned by or shared with the caller (or the caller
+		// is an admin), so the caller holds capabilities on all of them and
+		// the health object is included.
+		// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+		lr, err := h.toLinkResponse(r.Context(), l, true)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
@@ -264,7 +281,9 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lr, err := h.toLinkResponse(r.Context(), link)
+	// The creator is the primary owner, so the health object is included.
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+	lr, err := h.toLinkResponse(r.Context(), link, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
@@ -320,7 +339,10 @@ func (h *linksAPIHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lr, err := h.toLinkResponse(r.Context(), link)
+	// Anyone past the CanView gate holds capabilities on the link, so the
+	// health object is included (share recipients see health too).
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+	lr, err := h.toLinkResponse(r.Context(), link, caps.CanView)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
@@ -329,12 +351,14 @@ func (h *linksAPIHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, lr)
 }
 
-// Update modifies a link's url, title, description, and tags. Slug is immutable and ignored.
+// Update modifies a link's url, title, description, tags, expiration, and
+// archive state. Slug is immutable and ignored.
 // PUT /api/v1/links/{id}
 // Governing: SPEC-0005 REQ "Link Resource" — slug field MUST be ignored (immutable)
+// Governing: SPEC-0020 REQ "Archive State" — accepts a boolean archived field
 //
 // @Summary      Update a link
-// @Description  Updates url, title, description, and tags. Slug is immutable and ignored.
+// @Description  Updates url, title, description, tags, visibility, expiration, and archive state. Slug is immutable and ignored. A body containing only "archived" toggles the archive state without altering any other field; combining "archived" with other fields is a full update and requires url.
 // @Tags         Links
 // @Accept       json
 // @Produce      json
@@ -373,6 +397,36 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req UpdateLinkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body", CodeBadRequest)
+		return
+	}
+
+	// Archive-only toggle: a body whose ONLY populated field is archived
+	// (e.g. {"archived": true}) changes just the archive state. Routing it
+	// through the full-resource update would overwrite title, description,
+	// and tags with the zero values the caller never sent. The carve-out is
+	// deliberately this narrow: any sibling field without url falls through
+	// to the "url is required" 400 below instead of being silently discarded,
+	// so {"archived": true, "expires_at": <past>} is rejected just as MCP
+	// update_link rejects it — the two surfaces cannot diverge by one of them
+	// ignoring fields the other validates.
+	// Governing: SPEC-0020 REQ "Archive State" scenarios "API Archive
+	// Round-Trip", "Non-Editor Cannot Archive"
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — REST/MCP parity
+	archiveOnly := req.Archived != nil && req.URL == "" && req.Title == "" &&
+		req.Description == "" && req.Visibility == "" && !req.ExpiresAt.Set &&
+		req.Tags == nil
+	if archiveOnly {
+		updated, err := h.links.SetArchived(r.Context(), link.ID, *req.Archived)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
+			return
+		}
+		lr, err := h.toLinkResponse(r.Context(), updated, true)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
+			return
+		}
+		writeJSON(w, http.StatusOK, lr)
 		return
 	}
 
@@ -451,6 +505,18 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Archive toggle alongside a full update: an ordinary edit under the same
+	// CanEdit gate. true stamps archived_at (if not already set), false clears
+	// it; omitted leaves the archive state unchanged.
+	// Governing: SPEC-0020 REQ "Archive State"
+	if req.Archived != nil {
+		updated, err = h.links.SetArchived(r.Context(), link.ID, *req.Archived)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
+			return
+		}
+	}
+
 	// Update tags. Duplicate spellings are deduped by slug inside SetTags; any
 	// remaining failure is reported clearly — the link row itself was already
 	// updated and PUT is idempotent, so the client can safely retry (issue #198).
@@ -464,7 +530,10 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lr, err := h.toLinkResponse(r.Context(), updated)
+	// Owners and admins are the only callers who reach a successful update, so
+	// the health object is included.
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+	lr, err := h.toLinkResponse(r.Context(), updated, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return
@@ -714,15 +783,29 @@ func (h *linksAPIHandler) RemoveOwner(w http.ResponseWriter, r *http.Request) {
 }
 
 // toLinkResponse converts a store.Link to an API LinkResponse, including owners and tags.
-func (h *linksAPIHandler) toLinkResponse(ctx context.Context, link *store.Link) (*LinkResponse, error) {
-	return buildLinkResponse(ctx, h.links, h.ownership, link)
+// includeHealth attaches the capability-gated health object (SPEC-0020).
+func (h *linksAPIHandler) toLinkResponse(ctx context.Context, link *store.Link, includeHealth bool) (*LinkResponse, error) {
+	return buildLinkResponse(ctx, h.links, h.ownership, link, includeHealth)
+}
+
+// uncheckedHealth returns the health object for a link with no recorded
+// checks. The real derivation from the link_health table lands with the
+// destination-health story (#274); until then absence of a row means
+// "unchecked" for every link, with null details.
+// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP", REQ "Destination Health Checking"
+func uncheckedHealth() *HealthResponse {
+	return &HealthResponse{Status: store.HealthUnchecked}
 }
 
 // buildLinkResponse converts a store.Link to an API LinkResponse, populating
-// owners, tags, and visibility. Shared by every endpoint that returns links so
-// the JSON shape stays consistent.
+// owners, tags, visibility, and the derived lifecycle state. Shared by every
+// endpoint that returns links so the JSON shape stays consistent.
+// includeHealth must be true only for callers holding capabilities on the
+// link (owners, co-owners, admins, share recipients) — callers without
+// capabilities never receive the health object.
 // Governing: SPEC-0005 REQ "API Response Structures"
-func buildLinkResponse(ctx context.Context, links *store.LinkStore, ownership *store.OwnershipStore, link *store.Link) (*LinkResponse, error) {
+// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+func buildLinkResponse(ctx context.Context, links *store.LinkStore, ownership *store.OwnershipStore, link *store.Link, includeHealth bool) (*LinkResponse, error) {
 	owners, err := ownership.ListOwnerUsers(link.ID)
 	if err != nil {
 		return nil, err
@@ -746,17 +829,26 @@ func buildLinkResponse(ctx context.Context, links *store.LinkStore, ownership *s
 		tagNames = append(tagNames, t.Name)
 	}
 
-	return &LinkResponse{
+	resp := &LinkResponse{
 		ID:          link.ID,
 		Slug:        link.Slug,
 		URL:         link.URL,
 		Title:       link.Title,
 		Description: link.Description,
 		Visibility:  link.Visibility,
-		ExpiresAt:   link.ExpiresAt, // Governing: SPEC-0020 REQ "Link Expiration"
-		Tags:        tagNames,
-		Owners:      ownerResponses,
-		CreatedAt:   link.CreatedAt,
-		UpdatedAt:   link.UpdatedAt,
-	}, nil
+		ExpiresAt:   link.ExpiresAt,  // Governing: SPEC-0020 REQ "Link Expiration"
+		ArchivedAt:  link.ArchivedAt, // Governing: SPEC-0020 REQ "Archive State"
+		// Derived at read time from the two nullable timestamps — archived
+		// wins when both apply (ADR-0020).
+		// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+		LifecycleState: link.LifecycleState(time.Now().UTC()),
+		Tags:           tagNames,
+		Owners:         ownerResponses,
+		CreatedAt:      link.CreatedAt,
+		UpdatedAt:      link.UpdatedAt,
+	}
+	if includeHealth {
+		resp.Health = uncheckedHealth()
+	}
+	return resp, nil
 }

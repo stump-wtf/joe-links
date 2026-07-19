@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -503,6 +504,138 @@ func (h *LinksHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`<div id="toast-area" hx-swap-oob="innerHTML:#toast-area"><div class="alert alert-success"><span>Link deleted.</span></div></div>`))
+}
+
+// Archive handles POST /dashboard/links/{id}/archive: a reversible off switch
+// distinct from delete — the row, slug reservation, and click history all
+// survive.
+// Governing: SPEC-0020 REQ "Archive State" scenario "Archive Toggle Stops
+// Resolution, Keeps Stats"
+func (h *LinksHandler) Archive(w http.ResponseWriter, r *http.Request) {
+	h.setArchived(w, r, true)
+}
+
+// Unarchive handles POST /dashboard/links/{id}/unarchive, clearing
+// archived_at so the slug resolves again (absent expiry).
+// Governing: SPEC-0020 REQ "Archive State" scenario "Unarchive Restores Resolution"
+func (h *LinksHandler) Unarchive(w http.ResponseWriter, r *http.Request) {
+	h.setArchived(w, r, false)
+}
+
+// setArchived is the shared archive/unarchive toggle. The state change itself
+// lives in the store (SetArchived) so web, REST, and MCP cannot diverge.
+// Governing: SPEC-0020 REQ "Archive State", ADR-0020
+func (h *LinksHandler) setArchived(w http.ResponseWriter, r *http.Request, archived bool) {
+	user := auth.UserFromContext(r.Context())
+	id := chi.URLParam(r, "id")
+
+	link, err := h.links.GetByID(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Archive and unarchive are edits: owners, co-owners, and admins only.
+	// Share recipients and unrelated users get 403.
+	// Governing: SPEC-0020 REQ "Archive State" scenario "Non-Editor Cannot Archive"
+	allowed, err := store.IsOwnerOrAdmin(h.owns, link.ID, user.ID, user.Role)
+	if err != nil {
+		log.Printf("ownership check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		RenderForbidden(w, r)
+		return
+	}
+
+	if _, err := h.links.SetArchived(r.Context(), link.ID, archived); err != nil {
+		log.Printf("set archived=%v for link %s: %v", archived, link.ID, err)
+		http.Error(w, "could not update archive state", http.StatusInternalServerError)
+		return
+	}
+
+	// HTMX-aware: swap the refreshed detail view in place; plain requests
+	// redirect back to the detail page.
+	// Governing: SPEC-0020 REQ "Archive State" — toggle on the detail surface, HTMX-aware
+	if isHTMX(r) {
+		h.Detail(w, r)
+		return
+	}
+	http.Redirect(w, r, "/dashboard/links/"+link.ID, http.StatusSeeOther)
+}
+
+// Renew handles POST /dashboard/links/{id}/renew: one-click clearing of
+// expires_at so an expired link resolves again. Renew never touches
+// archived_at — an archived link stays archived (and keeps not resolving).
+// Governing: SPEC-0020 REQ "Renewal"
+func (h *LinksHandler) Renew(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromContext(r.Context())
+	id := chi.URLParam(r, "id")
+
+	link, err := h.links.GetByID(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Renewal is an edit; share recipients see the expired badge but cannot
+	// renew.
+	// Governing: SPEC-0020 REQ "Renewal" scenario "Renew Requires Edit Capability"
+	caps, err := store.LinkCapsFor(r.Context(), h.owns, h.links, link.ID, user)
+	if err != nil {
+		log.Printf("capability check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !caps.CanEdit {
+		RenderForbidden(w, r)
+		return
+	}
+
+	renewed, err := h.links.Renew(r.Context(), link.ID)
+	if err != nil {
+		log.Printf("renew link %s: %v", link.ID, err)
+		http.Error(w, "could not renew link", http.StatusInternalServerError)
+		return
+	}
+
+	// HTMX swaps the affected row back in without the expired badge or renew
+	// button; plain requests fall back to the dashboard. The fragment must
+	// reproduce the originating surface's column set — the renew button
+	// renders on both the dashboard (no Title column) and the tag detail page
+	// (Title column present), and a row swapped in with the wrong shape would
+	// misalign every cell after the missing one.
+	// Governing: SPEC-0020 REQ "Renewal" scenario "One-Click Renew Clears Expiry"
+	if isHTMX(r) {
+		ctxData := DashboardPage{
+			BasePage:       newBasePage(r, user),
+			User:           user,
+			ShowTitle:      renewSourceShowsTitle(r),
+			ShowVisibility: true,
+			ShowActions:    true,
+			ShowLifecycle:  true,
+			RowCaps:        map[string]store.LinkCaps{link.ID: caps},
+		}
+		renderFragment(w, "link_row", map[string]any{"Link": renewed, "Ctx": ctxData})
+		return
+	}
+	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+}
+
+// renewSourceShowsTitle reports whether the surface the renew click came from
+// renders the Title column, so the swapped-in row matches its table's shape.
+// HTMX sends the page URL in HX-Current-URL; the tag detail page
+// (/dashboard/tags/{slug}, internal/handler/tags.go) sets ShowTitle while the
+// dashboard does not. Absent or unparseable headers fall back to the
+// dashboard shape.
+// Governing: SPEC-0020 REQ "Renewal" scenario "One-Click Renew Clears Expiry"
+func renewSourceShowsTitle(r *http.Request) bool {
+	cur, err := url.Parse(r.Header.Get("HX-Current-URL"))
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(cur.Path, "/dashboard/tags/")
 }
 
 // ConfirmDelete renders the delete confirmation modal for a link.

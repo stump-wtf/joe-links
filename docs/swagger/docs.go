@@ -530,7 +530,7 @@ const docTemplate = `{
                         "BearerToken": []
                     }
                 ],
-                "description": "Updates url, title, description, and tags. Slug is immutable and ignored.",
+                "description": "Updates url, title, description, tags, visibility, expiration, and archive state. Slug is immutable and ignored. A body containing only \"archived\" toggles the archive state without altering any other field; combining \"archived\" with other fields is a full update and requires url.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1741,6 +1741,26 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api.HealthResponse": {
+            "type": "object",
+            "properties": {
+                "last_checked_at": {
+                    "type": "string"
+                },
+                "last_status": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "unchecked",
+                        "ok",
+                        "broken",
+                        "skipped"
+                    ]
+                }
+            }
+        },
         "internal_api.LinkListResponse": {
             "type": "object",
             "properties": {
@@ -1758,6 +1778,9 @@ const docTemplate = `{
         "internal_api.LinkResponse": {
             "type": "object",
             "properties": {
+                "archived_at": {
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -1767,8 +1790,19 @@ const docTemplate = `{
                 "expires_at": {
                     "type": "string"
                 },
+                "health": {
+                    "$ref": "#/definitions/internal_api.HealthResponse"
+                },
                 "id": {
                     "type": "string"
+                },
+                "lifecycle_state": {
+                    "type": "string",
+                    "enum": [
+                        "active",
+                        "expired",
+                        "archived"
+                    ]
                 },
                 "owners": {
                     "type": "array",
@@ -2006,6 +2040,9 @@ const docTemplate = `{
         "internal_api.UpdateLinkRequest": {
             "type": "object",
             "properties": {
+                "archived": {
+                    "type": "boolean"
+                },
                 "description": {
                     "type": "string"
                 },

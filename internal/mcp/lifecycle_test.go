@@ -188,6 +188,59 @@ func TestMCPLifecycle_ExpirationClearedOnEdit(t *testing.T) {
 	}
 }
 
+// Scenario: Non-Capable Caller Gets No Health Data (MCP surface — the REST
+// half lives in internal/api/lifecycle_archive_test.go)
+// WHEN a caller with no ownership, share, or admin relationship lists public
+// links THEN a stranger's public row carries lifecycle_state but no health
+// object, while the caller's own row in the same listing includes it.
+// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+func TestMCPLifecycle_NonCapableCallerGetsNoHealthData(t *testing.T) {
+	env := newFullEnv(t, nil)
+	_, ownerTok := seedUserToken(t, env, "owner@example.com")
+	_, strangerTok := seedUserToken(t, env, "stranger@example.com")
+
+	if resp := callTool(t, env, ownerTok, "create_link", map[string]any{
+		"slug": "open-to-all", "url": "https://example.com/public", "visibility": "public",
+	}); resp.IsError {
+		t.Fatalf("seed create_link: %s", resp.ErrMessage)
+	}
+	if resp := callTool(t, env, strangerTok, "create_link", map[string]any{
+		"slug": "strangers-own", "url": "https://example.com/mine", "visibility": "public",
+	}); resp.IsError {
+		t.Fatalf("seed create_link: %s", resp.ErrMessage)
+	}
+
+	resp := callTool(t, env, strangerTok, "list_links", map[string]any{"filter": "public"})
+	if resp.IsError {
+		t.Fatalf("list_links: %s %s", resp.ErrCode, resp.ErrMessage)
+	}
+	links, _ := resp.Structured["links"].([]any)
+	rows := map[string]map[string]any{}
+	for _, l := range links {
+		m, _ := l.(map[string]any)
+		rows[m["slug"].(string)] = m
+	}
+
+	theirs, ok := rows["open-to-all"]
+	if !ok {
+		t.Fatalf("public list missing open-to-all; rows=%v", rows)
+	}
+	if got := theirs["lifecycle_state"]; got != "active" {
+		t.Errorf("lifecycle_state = %v, want active (lifecycle fields are not capability-gated)", got)
+	}
+	if h, present := theirs["health"]; present {
+		t.Errorf("health object leaked to a non-capable caller: %v", h)
+	}
+
+	mine, ok := rows["strangers-own"]
+	if !ok {
+		t.Fatalf("public list missing strangers-own; rows=%v", rows)
+	}
+	if mine["health"] == nil {
+		t.Error("health object missing on the caller's own public row")
+	}
+}
+
 // Scenario: Share Recipient Cannot Set Expiry
 // WHEN a user whose only relationship to the link is a link_shares record
 // calls update_link with expires_at THEN forbidden and no modification.

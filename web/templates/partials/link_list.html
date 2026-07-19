@@ -79,7 +79,23 @@
             {{- if $ctx.ShowLifecycle -}}
             {{- $state := $l.LifecycleState now -}}
             {{if eq $state "archived"}}<span class="badge badge-sm badge-neutral">archived</span>
-            {{- else if eq $state "expired"}}<span class="badge badge-sm badge-warning">expired</span>{{end}}
+            {{- else if eq $state "expired"}}<span class="badge badge-sm badge-warning">expired</span>
+            {{- /* One-click renew next to the expired badge for viewers who
+                 may edit (owners/co-owners/admins — share recipients see the
+                 badge only). Rendered on the RowCaps surfaces (dashboard, tag
+                 detail), not the admin table, whose rows have a different
+                 shape and inline editing instead.
+                 Governing: SPEC-0020 REQ "Renewal" scenario "One-Click Renew
+                 Clears Expiry", REQ "Expired Link Resolution" scenario "Owner
+                 Sees Expired Badge on Dashboard" */ -}}
+            {{- if not $ctx.IsAdminPage}}{{- $caps := index $ctx.RowCaps $l.ID -}}
+            {{- if $caps.CanEdit}}
+            <button class="btn btn-xs btn-warning btn-outline tooltip tooltip-right" data-tip="Clear the expiration so this link resolves again"
+                    hx-post="/dashboard/links/{{$l.ID}}/renew"
+                    hx-target="#link-{{$l.ID}}"
+                    hx-swap="outerHTML">Renew</button>
+            {{- end}}{{- end}}
+            {{- end}}
             {{- end}}
         </div>
     </td>

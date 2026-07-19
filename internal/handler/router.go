@@ -126,6 +126,11 @@ func NewRouter(deps Deps) http.Handler {
 		r.Get("/dashboard/links/{id}/confirm-delete", links.ConfirmDelete)
 		r.Put("/dashboard/links/{id}", links.Update)
 		r.Delete("/dashboard/links/{id}", links.Delete)
+		// Lifecycle writes are edits: Session + CanEdit, enforced in the handlers.
+		// Governing: SPEC-0020 REQ "Archive State", REQ "Renewal"
+		r.Post("/dashboard/links/{id}/archive", links.Archive)
+		r.Post("/dashboard/links/{id}/unarchive", links.Unarchive)
+		r.Post("/dashboard/links/{id}/renew", links.Renew)
 		r.Post("/dashboard/links/{id}/owners", links.AddOwner)
 		r.Delete("/dashboard/links/{id}/owners/{uid}", links.RemoveOwner)
 

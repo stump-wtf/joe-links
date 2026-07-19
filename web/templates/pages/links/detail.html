@@ -3,6 +3,10 @@
 {{define "content"}}
 <!-- Governing: SPEC-0004 REQ "Link Detail View" -->
 {{if .Link}}
+<!-- Wrapper so the HTMX-aware lifecycle endpoints (archive/unarchive) can
+     swap the refreshed detail view back in place.
+     Governing: SPEC-0020 REQ "Archive State" -->
+<div id="link-detail">
 <div class="mb-6">
     <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
@@ -25,6 +29,21 @@
                  capability-gated; share recipients view the page read-only. -->
             {{if .CanEdit}}
             <a href="/dashboard/links/{{.Link.ID}}/edit" class="btn btn-sm btn-primary">Edit</a>
+            <!-- Governing: SPEC-0020 REQ "Archive State" — reversible archive
+                 toggle on the detail surface, CanEdit-gated. The slug stays
+                 reserved and click stats are kept; HTMX swaps the refreshed
+                 detail view in place. -->
+            {{if .Link.IsArchived}}
+            <button class="btn btn-sm btn-outline"
+                    hx-post="/dashboard/links/{{.Link.ID}}/unarchive"
+                    hx-target="#link-detail"
+                    hx-swap="outerHTML">Unarchive</button>
+            {{else}}
+            <button class="btn btn-sm btn-outline"
+                    hx-post="/dashboard/links/{{.Link.ID}}/archive"
+                    hx-target="#link-detail"
+                    hx-swap="outerHTML">Archive</button>
+            {{end}}
             {{end}}
             {{if .CanDelete}}
             <!-- Governing: SPEC-0004 REQ "Delete Link" — DaisyUI confirm modal (inline) -->
@@ -116,5 +135,6 @@
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 {{end}}
+</div>
 {{end}}
 {{end}}

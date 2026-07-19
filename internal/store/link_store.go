@@ -36,6 +36,14 @@ const (
 	LifecycleArchived = "archived"
 )
 
+// HealthUnchecked is the derived destination-health state for a link with no
+// recorded checks. The full health-state machine (ok/broken/skipped, the
+// link_health table, and the checker goroutine) lands with the
+// destination-health story (#274); until then every link surfaces as
+// unchecked — absence of a health row means "never checked".
+// Governing: SPEC-0020 REQ "Destination Health Checking", REQ "Lifecycle State in API and MCP"
+const HealthUnchecked = "unchecked"
+
 // IsExpired reports whether the link's expires_at is set and has passed.
 // Governing: SPEC-0020 REQ "Link Expiration" — expiry is derived at read time
 func (l *Link) IsExpired(now time.Time) bool {
@@ -455,6 +463,55 @@ func (s *LinkStore) Update(ctx context.Context, id, url, title, description, vis
 		UPDATE links SET url = ?, title = ?, description = ?, visibility = ?, expires_at = ?, updated_at = ? WHERE id = ?
 	`), url, title, description, visibility, expiresAt, now, id)
 	if err != nil {
+		return nil, err
+	}
+	return s.GetByID(ctx, id)
+}
+
+// SetArchived sets or clears the archive marker. true stamps archived_at with
+// the current UTC time only when it is not already set (re-archiving an
+// archived link keeps the original timestamp); false clears it. The row, its
+// slug reservation, and its link_clicks are untouched either way — archiving
+// is distinct from deletion. Callers gate this with LinkCaps.CanEdit; the
+// store is shared by web, REST, and MCP so the toggle cannot diverge.
+// Governing: SPEC-0020 REQ "Archive State", ADR-0020
+func (s *LinkStore) SetArchived(ctx context.Context, id string, archived bool) (*Link, error) {
+	stored, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	switch {
+	case archived && stored.ArchivedAt == nil:
+		_, err = s.db.ExecContext(ctx, s.q(`UPDATE links SET archived_at = ?, updated_at = ? WHERE id = ?`), now, now, id)
+	case !archived && stored.ArchivedAt != nil:
+		_, err = s.db.ExecContext(ctx, s.q(`UPDATE links SET archived_at = NULL, updated_at = ? WHERE id = ?`), now, id)
+	default:
+		// Already in the requested state — idempotent no-op.
+		return stored, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetByID(ctx, id)
+}
+
+// Renew clears expires_at, making the link permanent until a new expiry is
+// set through the ordinary edit paths. Idempotent: renewing a link with no
+// expires_at is a no-op. Renew never touches archived_at — a renewed link
+// that is archived stays archived and keeps not resolving.
+// Governing: SPEC-0020 REQ "Renewal" scenarios "One-Click Renew Clears
+// Expiry", "Renew Does Not Unarchive"
+func (s *LinkStore) Renew(ctx context.Context, id string) (*Link, error) {
+	stored, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if stored.ExpiresAt == nil {
+		return stored, nil
+	}
+	now := time.Now().UTC()
+	if _, err := s.db.ExecContext(ctx, s.q(`UPDATE links SET expires_at = NULL, updated_at = ? WHERE id = ?`), now, id); err != nil {
 		return nil, err
 	}
 	return s.GetByID(ctx, id)

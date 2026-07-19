@@ -148,10 +148,24 @@ func (h *tagsAPIHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Non-admin tag lists include public links the caller holds no
+	// capabilities on, so the health object is capability-gated per row.
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" scenario
+	// "Non-Capable Caller Gets No Health Data"
+	ids := make([]string, len(links))
+	for i, l := range links {
+		ids[i] = l.ID
+	}
+	rowCaps, err := store.LinkCapsForAll(r.Context(), h.ownership, h.links, ids, user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
+		return
+	}
+
 	// Governing: SPEC-0005 REQ "API Response Structures" — consistent link shape (owners, tags, visibility)
 	resp := &LinkListResponse{Links: make([]*LinkResponse, 0, len(links))}
 	for _, l := range links {
-		lr, err := buildLinkResponse(r.Context(), h.links, h.ownership, l)
+		lr, err := buildLinkResponse(r.Context(), h.links, h.ownership, l, rowCaps[l.ID].CanView)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return

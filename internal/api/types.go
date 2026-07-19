@@ -44,21 +44,38 @@ type OwnerResponse struct {
 	IsPrimary bool   `json:"is_primary"`
 }
 
+// HealthResponse is the destination-health object attached to link resources
+// for callers holding capabilities on the link (owners, co-owners, admins,
+// share recipients). Until the destination health checker lands (story #274 —
+// the link_health table), every link's derived state is "unchecked" with null
+// details: absence of a health row means "never checked".
+// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP", REQ "Destination Health Checking"
+type HealthResponse struct {
+	Status        string     `json:"status" enums:"unchecked,ok,broken,skipped"`
+	LastCheckedAt *time.Time `json:"last_checked_at"`
+	LastStatus    *int       `json:"last_status"`
+}
+
 // LinkResponse is the full link resource.
 // Governing: SPEC-0005 REQ "API Response Structures", SPEC-0010 REQ "REST API Visibility Field"
 // Governing: SPEC-0020 REQ "Link Expiration" — expires_at is RFC 3339 or null (never expires)
+// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — archived_at,
+// derived lifecycle_state, and the capability-gated health object
 type LinkResponse struct {
-	ID          string          `json:"id"`
-	Slug        string          `json:"slug"`
-	URL         string          `json:"url"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	Visibility  string          `json:"visibility"`
-	ExpiresAt   *time.Time      `json:"expires_at"`
-	Tags        []string        `json:"tags"`
-	Owners      []OwnerResponse `json:"owners"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID             string          `json:"id"`
+	Slug           string          `json:"slug"`
+	URL            string          `json:"url"`
+	Title          string          `json:"title"`
+	Description    string          `json:"description"`
+	Visibility     string          `json:"visibility"`
+	ExpiresAt      *time.Time      `json:"expires_at"`
+	ArchivedAt     *time.Time      `json:"archived_at"`
+	LifecycleState string          `json:"lifecycle_state" enums:"active,expired,archived"`
+	Health         *HealthResponse `json:"health,omitempty"`
+	Tags           []string        `json:"tags"`
+	Owners         []OwnerResponse `json:"owners"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 // LinkListResponse wraps a paginated list of links.
@@ -85,12 +102,16 @@ type CreateLinkRequest struct {
 // Governing: SPEC-0005 REQ "Link Resource" — slug is intentionally omitted (immutable).
 // Governing: SPEC-0010 REQ "REST API Visibility Field"
 // Governing: SPEC-0020 REQ "Link Expiration" — expires_at omitted = unchanged, null = clear
+// Governing: SPEC-0020 REQ "Archive State" — archived true sets archived_at
+// (if not already set), false clears it; a body with only "archived" toggles
+// archive state without performing the full-resource update
 type UpdateLinkRequest struct {
 	URL         string       `json:"url"`
 	Title       string       `json:"title,omitempty"`
 	Description string       `json:"description,omitempty"`
 	Visibility  string       `json:"visibility,omitempty"`
 	ExpiresAt   OptionalTime `json:"expires_at,omitempty" swaggertype:"string" format:"date-time" extensions:"x-nullable"`
+	Archived    *bool        `json:"archived,omitempty"`
 	Tags        []string     `json:"tags,omitempty"`
 }
 

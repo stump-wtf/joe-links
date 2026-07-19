@@ -214,6 +214,35 @@ func TestLifecycle_ArchivedBeatsExpiredInDerivedState(t *testing.T) {
 	}
 }
 
+// Scenario: Archived Slug Stays Reserved
+// WHEN any user attempts to create a new link with the slug of an archived
+// link THEN creation fails with the slug-taken validation error — archiving
+// keeps the links row, so the global slug uniqueness index still applies.
+// Governing: SPEC-0020 REQ "Archive State"
+func TestLifecycle_ArchivedSlugStaysReserved(t *testing.T) {
+	ls, _, userID := newLifecycleEnv(t)
+	ctx := context.Background()
+
+	link, err := ls.CreateFull(ctx, "retired", "https://example.com", userID, "", "", "public", nil, nil, nil, "")
+	if err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+	archived, err := ls.SetArchived(ctx, link.ID, true)
+	if err != nil {
+		t.Fatalf("SetArchived: %v", err)
+	}
+	if archived.ArchivedAt == nil {
+		t.Fatal("archived_at not set after SetArchived(true)")
+	}
+
+	if _, err := ls.Create(ctx, "retired", "https://example.com/other", userID, "", "", "public"); !errors.Is(err, store.ErrSlugTaken) {
+		t.Errorf("Create with archived slug = %v, want ErrSlugTaken", err)
+	}
+	if _, err := ls.CreateFull(ctx, "retired", "https://example.com/other", userID, "", "", "public", nil, nil, nil, ""); !errors.Is(err, store.ErrSlugTaken) {
+		t.Errorf("CreateFull with archived slug = %v, want ErrSlugTaken", err)
+	}
+}
+
 // ValidateExpiresAt is the one validation rule all write surfaces share; pin
 // its edge cases directly.
 // Governing: SPEC-0020 REQ "Link Expiration"

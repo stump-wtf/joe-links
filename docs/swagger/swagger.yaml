@@ -95,6 +95,20 @@ definitions:
       error:
         type: string
     type: object
+  internal_api.HealthResponse:
+    properties:
+      last_checked_at:
+        type: string
+      last_status:
+        type: integer
+      status:
+        enum:
+        - unchecked
+        - ok
+        - broken
+        - skipped
+        type: string
+    type: object
   internal_api.LinkListResponse:
     properties:
       links:
@@ -106,13 +120,23 @@ definitions:
     type: object
   internal_api.LinkResponse:
     properties:
+      archived_at:
+        type: string
       created_at:
         type: string
       description:
         type: string
       expires_at:
         type: string
+      health:
+        $ref: '#/definitions/internal_api.HealthResponse'
       id:
+        type: string
+      lifecycle_state:
+        enum:
+        - active
+        - expired
+        - archived
         type: string
       owners:
         items:
@@ -267,6 +291,8 @@ definitions:
     type: object
   internal_api.UpdateLinkRequest:
     properties:
+      archived:
+        type: boolean
       description:
         type: string
       expires_at:
@@ -611,8 +637,10 @@ paths:
     put:
       consumes:
       - application/json
-      description: Updates url, title, description, and tags. Slug is immutable and
-        ignored.
+      description: Updates url, title, description, tags, visibility, expiration,
+        and archive state. Slug is immutable and ignored. A body containing only "archived"
+        toggles the archive state without altering any other field; combining "archived"
+        with other fields is a full update and requires url.
       parameters:
       - description: Link ID
         in: path
