@@ -1,15 +1,19 @@
 // Governing: SPEC-0016 REQ "Click Data Schema", REQ "Click Recording", ADR-0016
-// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021
+// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", REQ "Click Breakdowns", ADR-0021
 package store
 
 import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net/url"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/joestump/joe-links/internal/analytics"
 )
 
 // truncateRunes returns s limited to at most n Unicode code points, never
@@ -295,6 +299,161 @@ func (s *ClickStore) dailyClickSeries(ctx context.Context, linkID string, days, 
 		})
 	}
 	return series, nil
+}
+
+// BreakdownRow is one named count in a breakdown table (a referrer host, a
+// browser family, or an OS family).
+// Governing: SPEC-0021 REQ "Click Breakdowns", ADR-0021
+type BreakdownRow struct {
+	Name  string
+	Count int64
+}
+
+// AuthBreakdown is the authenticated-vs-anonymous click split (non-null vs
+// null user_id, SPEC-0016's recording rule). Counts only — roster-inert by
+// construction: a secure link can never record an anonymous click, so the
+// split is degenerate exactly where roster inference would matter.
+// Governing: SPEC-0021 REQ "Click Breakdowns"
+type AuthBreakdown struct {
+	Authenticated int64
+	Anonymous     int64
+}
+
+// ClickBreakdowns holds the three counts-only breakdown tables for a link
+// over a 30/90-day window. No field anywhere in it names or identifies any
+// user, so every CanStats caller — including share recipients — gets it in
+// full (ADR-0021).
+// Governing: SPEC-0021 REQ "Click Breakdowns", REQ "Capability Gating of Analytics Surfaces"
+type ClickBreakdowns struct {
+	Referrers []BreakdownRow // by host, top-10 + "Other"; empty/unparseable → "Direct / unknown"
+	Browsers  []BreakdownRow // read-time families per REQ "User-Agent Parsing"
+	OS        []BreakdownRow
+	Auth      AuthBreakdown
+}
+
+// referrerDirectLabel groups clicks with an empty or unparseable referrer.
+// Governing: SPEC-0021 REQ "Click Breakdowns"
+const referrerDirectLabel = "Direct / unknown"
+
+// breakdownTopN caps each breakdown table at the 10 largest entries, with the
+// remainder summed into a single "Other" row.
+// Governing: SPEC-0021 REQ "Click Breakdowns" — Scenario Top-10 plus Other
+const breakdownTopN = 10
+
+// GetClickBreakdowns computes the referrer/browser/OS/auth breakdowns for a
+// link over the last days (30 or 90) whole UTC calendar days — the same
+// pinned window boundary as the daily time series.
+// Governing: SPEC-0021 REQ "Click Breakdowns", ADR-0021
+func (s *ClickStore) GetClickBreakdowns(ctx context.Context, linkID string, days int) (ClickBreakdowns, error) {
+	return s.clickBreakdowns(ctx, linkID, days, time.Now().UTC())
+}
+
+// clickBreakdowns is GetClickBreakdowns with an injectable clock for tests.
+//
+// Grouping and ranking are computed in Go from a portable column fetch — no
+// SQL string functions on referrer/user_agent (host extraction and UA parsing
+// are not expressible in portable SQL at all, ADR-0021). The aggregation
+// streams over the result rows, accumulating counts in bounded maps; the
+// fetched column values are never materialized as a full in-memory slice.
+// Governing: SPEC-0021 REQ "Click Breakdowns", ADR-0021, ADR-0002
+func (s *ClickStore) clickBreakdowns(ctx context.Context, linkID string, days int, now time.Time) (ClickBreakdowns, error) {
+	var b ClickBreakdowns
+
+	// Same window policy as the time series: callers (API 400, web UI
+	// fallback) enforce their own behavior before reaching the store.
+	// Governing: SPEC-0021 REQ "Click Breakdowns"
+	if days != 30 && days != 90 {
+		return b, fmt.Errorf("invalid breakdown window %d days: must be 30 or 90", days)
+	}
+
+	// Window boundary pinned to whole UTC calendar days (today's partial day
+	// plus the preceding days−1), matching the time series — never a rolling
+	// now−Nd bound. No SQL date functions (ADR-0002).
+	now = now.UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	windowStart := today.AddDate(0, 0, -(days - 1))
+
+	rows, err := s.db.QueryContext(ctx, s.q(`
+		SELECT COALESCE(referrer, ''), COALESCE(user_agent, ''), COALESCE(user_id, '')
+		FROM link_clicks
+		WHERE link_id = ? AND clicked_at >= ?
+	`), linkID, windowStart)
+	if err != nil {
+		return b, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	refCounts := make(map[string]int64)
+	browserCounts := make(map[string]int64)
+	osCounts := make(map[string]int64)
+	for rows.Next() {
+		var referrer, ua, userID string
+		if err := rows.Scan(&referrer, &ua, &userID); err != nil {
+			return b, err
+		}
+		refCounts[referrerHost(referrer)]++
+		// Read-time UA classification into the closed family taxonomy.
+		// Governing: SPEC-0021 REQ "User-Agent Parsing", ADR-0021
+		browser, osFamily := analytics.ClassifyUA(ua)
+		browserCounts[browser]++
+		osCounts[osFamily]++
+		if userID != "" {
+			b.Auth.Authenticated++
+		} else {
+			b.Auth.Anonymous++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return b, err
+	}
+
+	b.Referrers = topNPlusOther(refCounts, breakdownTopN)
+	b.Browsers = topNPlusOther(browserCounts, breakdownTopN)
+	b.OS = topNPlusOther(osCounts, breakdownTopN)
+	return b, nil
+}
+
+// referrerHost reduces a stored referrer to its URL host via url.Parse —
+// scheme, path, query, and fragment discarded (capture already strips query
+// and fragment, SPEC-0016). Empty or unparseable referrers group under
+// "Direct / unknown". Hosts are lowercased, which also keeps an attacker-sent
+// literal "Other" referrer host distinct from the aggregation row.
+// Governing: SPEC-0021 REQ "Click Breakdowns", Security Requirements "Referrer PII"
+func referrerHost(ref string) string {
+	if ref == "" {
+		return referrerDirectLabel
+	}
+	u, err := url.Parse(ref)
+	if err != nil || u.Hostname() == "" {
+		return referrerDirectLabel
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// topNPlusOther ranks a count map descending (name ascending on ties, for
+// deterministic output), keeps the n largest rows, and sums the remainder
+// into a single "Other" row.
+// Governing: SPEC-0021 REQ "Click Breakdowns" — Scenario Top-10 plus Other
+func topNPlusOther(counts map[string]int64, n int) []BreakdownRow {
+	out := make([]BreakdownRow, 0, len(counts))
+	for name, c := range counts {
+		out = append(out, BreakdownRow{Name: name, Count: c})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Name < out[j].Name
+	})
+	if len(out) <= n {
+		return out
+	}
+	var other int64
+	for _, r := range out[n:] {
+		other += r.Count
+	}
+	out = out[:n]
+	return append(out, BreakdownRow{Name: "Other", Count: other})
 }
 
 // HashIP computes SHA-256(ip + ":" + YYYYMMDD_UTC) for the current day.

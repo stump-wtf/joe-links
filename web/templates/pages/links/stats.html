@@ -7,6 +7,9 @@
     <div class="flex items-center gap-3 mb-6">
         <a href="/dashboard/links/{{.Link.ID}}" class="btn btn-ghost btn-sm">&larr; Back to link</a>
         <h1 class="text-2xl font-bold"><span class="font-mono">{{.Link.Slug}}</span> &mdash; Analytics</h1>
+        <!-- Governing: SPEC-0021 REQ "CSV Export", ADR-0021 — session route twin
+             of the PAT-only /api/v1 export (SPEC-0006 forbids sessions there) -->
+        <a href="/dashboard/links/{{.Link.ID}}/stats/export" class="btn btn-outline btn-sm ml-auto" download>Export CSV</a>
     </div>
 
     <!-- Stat cards -->
@@ -31,6 +34,10 @@
     <!-- Daily clicks chart -->
     <!-- Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021 -->
     {{template "stats_chart" .ChartData}}
+
+    <!-- Breakdown panels: referrers by host, browser/OS families, auth split -->
+    <!-- Governing: SPEC-0021 REQ "Click Breakdowns", ADR-0021 -->
+    {{template "stats_breakdowns" .Breakdowns}}
 
     <!-- Recent clicks table -->
     <div class="card bg-base-200 shadow">

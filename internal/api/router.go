@@ -80,13 +80,16 @@ func NewAPIRouter(deps Deps) http.Handler {
 		// Governing: SPEC-0010 REQ "Link Share Management API Endpoints"
 		registerShareRoutes(r, deps.LinkStore, deps.OwnershipStore, deps.UserStore)
 
-		// Link analytics routes (stats + click events + daily time series).
+		// Link analytics routes (stats + click events + daily time series +
+		// breakdowns + CSV export).
 		// Governing: SPEC-0016 REQ "REST API Stats Endpoint", REQ "REST API Clicks Endpoint", ADR-0016
-		// Governing: SPEC-0021 REQ "Time Series API", ADR-0021
+		// Governing: SPEC-0021 REQ "Time Series API", REQ "Click Breakdowns", REQ "CSV Export", ADR-0021
 		statsH := newStatsAPIHandler(deps.LinkStore, deps.ClickStore, deps.OwnershipStore)
 		r.Get("/links/{id}/stats", statsH.GetStats)
 		r.Get("/links/{id}/clicks", statsH.ListClicks)
 		r.Get("/links/{id}/stats/timeseries", statsH.GetTimeSeries)
+		r.Get("/links/{id}/stats/breakdowns", statsH.GetBreakdowns)
+		r.Get("/links/{id}/stats/export", statsH.ExportClicks)
 
 		// Admin-only routes behind role-check middleware group.
 		// Governing: SPEC-0005 REQ "Admin Endpoints", ADR-0008

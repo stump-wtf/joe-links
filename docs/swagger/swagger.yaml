@@ -10,6 +10,48 @@ definitions:
       email:
         type: string
     type: object
+  internal_api.BreakdownAuthSplit:
+    properties:
+      anonymous:
+        type: integer
+      authenticated:
+        type: integer
+    type: object
+  internal_api.BreakdownHostCount:
+    properties:
+      count:
+        type: integer
+      host:
+        type: string
+    type: object
+  internal_api.BreakdownNameCount:
+    properties:
+      count:
+        type: integer
+      name:
+        type: string
+    type: object
+  internal_api.BreakdownsResponse:
+    properties:
+      auth:
+        $ref: '#/definitions/internal_api.BreakdownAuthSplit'
+      browsers:
+        items:
+          $ref: '#/definitions/internal_api.BreakdownNameCount'
+        type: array
+      days:
+        type: integer
+      link_id:
+        type: string
+      os:
+        items:
+          $ref: '#/definitions/internal_api.BreakdownNameCount'
+        type: array
+      referrers:
+        items:
+          $ref: '#/definitions/internal_api.BreakdownHostCount'
+        type: array
+    type: object
   internal_api.ConfigResponse:
     properties:
       short_keyword:
@@ -893,6 +935,115 @@ paths:
       summary: Remove a share
       tags:
       - Shares
+  /links/{id}/stats/breakdowns:
+    get:
+      consumes:
+      - application/json
+      description: Referrer-by-host, browser family, OS family, and authenticated-vs-anonymous
+        breakdowns over the last 30 (default) or 90 UTC calendar days. Referrer and
+        family tables list the top 10 entries descending with the remainder summed
+        into an "Other" row. Counts only — no user identities.
+      parameters:
+      - description: Link ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 'Window size in days: 30 (default) or 90'
+        in: query
+        name: days
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.BreakdownsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      security:
+      - BearerToken: []
+      summary: Get link click breakdowns
+      tags:
+      - Stats
+  /links/{id}/stats/export:
+    get:
+      description: Streams the link's clicks as CSV with columns clicked_at,referrer,user_agent,browser,os,authenticated,user
+        — oldest first, capped at 100000 rows per response. When the cap truncates
+        the export, the X-Next-Cursor response header carries an opaque resumption
+        cursor; pass it back via the cursor parameter to continue. The user and raw
+        user_agent columns are populated only for callers with share-management rights;
+        other callers receive them empty. Cells are CSV-injection escaped.
+      parameters:
+      - description: Link ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Window lower bound, RFC 3339 (inclusive)
+        in: query
+        name: from
+        type: string
+      - description: Window upper bound, RFC 3339 (inclusive)
+        in: query
+        name: to
+        type: string
+      - description: Opaque continuation cursor from a prior response's X-Next-Cursor
+          header
+        in: query
+        name: cursor
+        type: string
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: CSV data
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      security:
+      - BearerToken: []
+      summary: Export link click history as CSV
+      tags:
+      - Stats
   /links/{id}/stats/timeseries:
     get:
       consumes:

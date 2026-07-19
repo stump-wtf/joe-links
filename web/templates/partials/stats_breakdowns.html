@@ -1,0 +1,74 @@
+<!-- Governing: SPEC-0021 REQ "Click Breakdowns", REQ "User-Agent Parsing", ADR-0021 -->
+{{/* Breakdown panels: referrers by host (top-10 + Other), browser/OS families
+     parsed from stored user agents at read time, and the authenticated-vs-
+     anonymous split — all counts only, over the same 30/90-day window as the
+     daily chart. No field here names or identifies any user, so the identical
+     panel serves every CanStats viewer, share recipients included.
+
+     The chart window toggle also updates this panel: the toggle's HTMX
+     response carries a second copy of this partial with OOB set, whose
+     hx-swap-oob root swaps it to the newly selected window. */}}
+{{define "stats_breakdowns"}}
+<div id="stats-breakdowns"{{if .OOB}} hx-swap-oob="outerHTML"{{end}} class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+    <div class="card bg-base-200 shadow">
+        <div class="card-body">
+            <h2 class="card-title text-base">Referrers</h2>
+            <p class="text-xs text-base-content/50">by host, last {{.Days}} days</p>
+            {{if .Referrers}}
+            <table class="table table-xs">
+                <tbody>
+                    {{range .Referrers}}
+                    <tr><td class="truncate max-w-48">{{.Name}}</td><td class="text-right tabular-nums">{{.Count}}</td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="text-sm text-base-content/50">No clicks in this window.</p>
+            {{end}}
+        </div>
+    </div>
+    <div class="card bg-base-200 shadow">
+        <div class="card-body">
+            <h2 class="card-title text-base">Browsers &amp; OS</h2>
+            <p class="text-xs text-base-content/50">parsed from user agents, last {{.Days}} days</p>
+            {{if .Browsers}}
+            <table class="table table-xs">
+                <tbody>
+                    {{range .Browsers}}
+                    <tr><td class="truncate max-w-48">{{.Name}}</td><td class="text-right tabular-nums">{{.Count}}</td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{end}}
+            {{if .OS}}
+            <table class="table table-xs">
+                <tbody>
+                    {{range .OS}}
+                    <tr><td class="truncate max-w-48">{{.Name}}</td><td class="text-right tabular-nums">{{.Count}}</td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{end}}
+            {{if not .Browsers}}
+            <p class="text-sm text-base-content/50">No clicks in this window.</p>
+            {{end}}
+        </div>
+    </div>
+    <div class="card bg-base-200 shadow">
+        <div class="card-body">
+            <h2 class="card-title text-base">Authentication</h2>
+            <p class="text-xs text-base-content/50">last {{.Days}} days</p>
+            {{if gt .Total 0}}
+            <table class="table table-xs">
+                <tbody>
+                    <tr><td>Authenticated</td><td class="text-right tabular-nums">{{.Auth.Authenticated}}</td><td class="text-right tabular-nums text-base-content/60">{{.AuthPct}}</td></tr>
+                    <tr><td>Anonymous</td><td class="text-right tabular-nums">{{.Auth.Anonymous}}</td><td class="text-right tabular-nums text-base-content/60">{{.AnonPct}}</td></tr>
+                </tbody>
+            </table>
+            {{else}}
+            <p class="text-sm text-base-content/50">No clicks in this window.</p>
+            {{end}}
+        </div>
+    </div>
+</div>
+{{end}}

@@ -1079,6 +1079,161 @@ const docTemplate = `{
                 }
             }
         },
+        "/links/{id}/stats/breakdowns": {
+            "get": {
+                "security": [
+                    {
+                        "BearerToken": []
+                    }
+                ],
+                "description": "Referrer-by-host, browser family, OS family, and authenticated-vs-anonymous breakdowns over the last 30 (default) or 90 UTC calendar days. Referrer and family tables list the top 10 entries descending with the remainder summed into an \"Other\" row. Counts only — no user identities.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Get link click breakdowns",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Link ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Window size in days: 30 (default) or 90",
+                        "name": "days",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.BreakdownsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/links/{id}/stats/export": {
+            "get": {
+                "security": [
+                    {
+                        "BearerToken": []
+                    }
+                ],
+                "description": "Streams the link's clicks as CSV with columns clicked_at,referrer,user_agent,browser,os,authenticated,user — oldest first, capped at 100000 rows per response. When the cap truncates the export, the X-Next-Cursor response header carries an opaque resumption cursor; pass it back via the cursor parameter to continue. The user and raw user_agent columns are populated only for callers with share-management rights; other callers receive them empty. Cells are CSV-injection escaped.",
+                "produces": [
+                    "text/csv"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Export link click history as CSV",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Link ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Window lower bound, RFC 3339 (inclusive)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Window upper bound, RFC 3339 (inclusive)",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Opaque continuation cursor from a prior response's X-Next-Cursor header",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "CSV data",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/links/{id}/stats/timeseries": {
             "get": {
                 "security": [
@@ -1457,6 +1612,71 @@ const docTemplate = `{
             "properties": {
                 "email": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api.BreakdownAuthSplit": {
+            "type": "object",
+            "properties": {
+                "anonymous": {
+                    "type": "integer"
+                },
+                "authenticated": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api.BreakdownHostCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "host": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.BreakdownNameCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.BreakdownsResponse": {
+            "type": "object",
+            "properties": {
+                "auth": {
+                    "$ref": "#/definitions/internal_api.BreakdownAuthSplit"
+                },
+                "browsers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.BreakdownNameCount"
+                    }
+                },
+                "days": {
+                    "type": "integer"
+                },
+                "link_id": {
+                    "type": "string"
+                },
+                "os": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.BreakdownNameCount"
+                    }
+                },
+                "referrers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.BreakdownHostCount"
+                    }
                 }
             }
         },

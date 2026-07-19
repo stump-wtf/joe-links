@@ -1,5 +1,5 @@
 // Governing: SPEC-0016 REQ "Link Stats Dashboard Page", ADR-0016
-// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021
+// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", REQ "Click Breakdowns", REQ "CSV Export", ADR-0021
 package handler
 
 import (
@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/joestump/joe-links/internal/auth"
@@ -29,6 +30,10 @@ type StatsPage struct {
 	// with its 30/90-day window toggle. Counts only — no per-user data.
 	// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021
 	ChartData StatsChartData
+	// Breakdowns feeds the stats_breakdowns partial: referrer/browser/OS/auth
+	// tables below the chart, over the same window. Counts only.
+	// Governing: SPEC-0021 REQ "Click Breakdowns", ADR-0021
+	Breakdowns StatsBreakdownsData
 }
 
 // StatsHandler serves the per-link analytics page.
@@ -95,9 +100,19 @@ func (h *StatsHandler) Show(w http.ResponseWriter, r *http.Request) {
 
 	// Daily time series chart over a selectable 30 (default) / 90-day window.
 	// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021
-	chart, err := h.loadChart(r, link.ID, chartDays(r))
+	days := chartDays(r)
+	chart, err := h.loadChart(r, link.ID, days)
 	if err != nil {
 		http.Error(w, "could not load click series", http.StatusInternalServerError)
+		return
+	}
+
+	// Breakdown tables below the chart, over the same window. Counts only —
+	// every CanStats viewer, share recipients included, gets them in full.
+	// Governing: SPEC-0021 REQ "Click Breakdowns", ADR-0021
+	breakdowns, err := h.loadBreakdowns(r, link.ID, days, false)
+	if err != nil {
+		http.Error(w, "could not load click breakdowns", http.StatusInternalServerError)
 		return
 	}
 
@@ -109,6 +124,7 @@ func (h *StatsHandler) Show(w http.ResponseWriter, r *http.Request) {
 		RecentClicks: recent,
 		ShowClickers: caps.CanManageShares,
 		ChartData:    chart,
+		Breakdowns:   breakdowns,
 	}
 
 	if isHTMX(r) {
@@ -171,7 +187,19 @@ func (h *StatsHandler) Chart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load click series", http.StatusInternalServerError)
 		return
 	}
+
+	// The breakdown tables cover the same selectable window as the chart, so
+	// the window toggle updates both: the chart is the primary swap target and
+	// the breakdowns ride along as an hx-swap-oob fragment.
+	// Governing: SPEC-0021 REQ "Click Breakdowns" — same 30/90-day window as the series
+	breakdowns, err := h.loadBreakdowns(r, link.ID, days, true)
+	if err != nil {
+		http.Error(w, "could not load click breakdowns", http.StatusInternalServerError)
+		return
+	}
+
 	renderFragment(w, "stats_chart", chart)
+	renderFragment(w, "stats_breakdowns", breakdowns)
 }
 
 // chartDays parses the days window for the web chart. The API rejects
@@ -183,6 +211,120 @@ func chartDays(r *http.Request) int {
 		return 90
 	}
 	return 30
+}
+
+// loadBreakdowns fetches the counts-only breakdown tables and builds the
+// template payload; oob marks the render that accompanies the chart
+// window-toggle fragment.
+// Governing: SPEC-0021 REQ "Click Breakdowns", ADR-0021
+func (h *StatsHandler) loadBreakdowns(r *http.Request, linkID string, days int, oob bool) (StatsBreakdownsData, error) {
+	b, err := h.clicks.GetClickBreakdowns(r.Context(), linkID, days)
+	if err != nil {
+		return StatsBreakdownsData{}, err
+	}
+	return newStatsBreakdownsData(linkID, days, oob, b), nil
+}
+
+// exportRowCap is the per-response export row cap, a var so tests can lower
+// it; production always uses store.ExportRowCap.
+// Governing: SPEC-0021 REQ "CSV Export"
+var exportRowCap = store.ExportRowCap
+
+// Export streams the link's click history as CSV — the session-authenticated
+// twin of GET /api/v1/links/{id}/stats/export, backing the "Export CSV"
+// button on the stats page (SPEC-0006 forbids sessions on /api/v1, so the UI
+// cannot call the API route). Both routes share one store-level streaming
+// iterator and one CSV encoder, so their output is identical for identical
+// inputs (ADR-0021).
+// Governing: SPEC-0021 REQ "CSV Export", ADR-0021
+func (h *StatsHandler) Export(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromContext(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/auth/login?return_url="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	link, err := h.links.GetByID(r.Context(), id)
+	if err != nil {
+		// Governing: SPEC-0016 REQ "Link Stats Dashboard Page" — styled 404, not bare text
+		w.WriteHeader(http.StatusNotFound)
+		data := notFoundPage{BasePage: newBasePage(r, user), User: user}
+		if isHTMX(r) {
+			renderPageFragment(w, "404.html", "content", data)
+			return
+		}
+		render(w, "404.html", data)
+		return
+	}
+
+	// Export honors the exact same authorization as the stats page: CanStats
+	// gates the rows; CanManageShares gates the user and raw user_agent
+	// columns. A presented cursor is a keyset position, not a capability —
+	// this check runs on every request regardless.
+	// Governing: SPEC-0021 REQ "CSV Export", REQ "Capability Gating of Analytics Surfaces"
+	caps, err := store.LinkCapsFor(r.Context(), h.owns, h.links, link.ID, user)
+	if err != nil {
+		log.Printf("stats export: capability check failed for link %s user %s: %v", link.ID, user.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !caps.CanStats {
+		RenderForbidden(w, r)
+		return
+	}
+
+	// Optional from/to RFC 3339 window bounds and opaque continuation cursor;
+	// invalid values are 400.
+	// Governing: SPEC-0021 REQ "CSV Export"
+	q := store.ClickExportQuery{LinkID: link.ID}
+	if v := r.URL.Query().Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid from parameter, expected RFC 3339 timestamp", http.StatusBadRequest)
+			return
+		}
+		q.From = t
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid to parameter, expected RFC 3339 timestamp", http.StatusBadRequest)
+			return
+		}
+		q.To = t
+	}
+	if v := r.URL.Query().Get("cursor"); v != "" {
+		ts, cid, err := store.DecodeClickExportCursor(v)
+		if err != nil {
+			http.Error(w, "invalid cursor", http.StatusBadRequest)
+			return
+		}
+		q.AfterTS, q.AfterID = ts, cid
+	}
+
+	// Response headers precede a streamed body, so truncation is determined
+	// before streaming begins via a single keyset probe; the X-Next-Cursor
+	// header's absence means the export is complete.
+	// Governing: SPEC-0021 REQ "CSV Export"
+	nextTS, nextID, truncated, err := h.clicks.ClickExportNextCursor(r.Context(), q, exportRowCap)
+	if err != nil {
+		http.Error(w, "could not prepare export", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+link.Slug+`-clicks.csv"`)
+	if truncated {
+		w.Header().Set("X-Next-Cursor", store.EncodeClickExportCursor(nextTS, nextID))
+	}
+	w.WriteHeader(http.StatusOK)
+
+	if err := h.clicks.StreamClickExportCSV(r.Context(), w, q, exportRowCap, caps.CanManageShares); err != nil {
+		// The status line and headers are already on the wire; all we can do
+		// is stop and log — the truncated body signals the failure.
+		log.Printf("stats export: streaming CSV for link %s failed: %v", link.ID, err)
+	}
 }
 
 // loadChart fetches the gap-filled daily series and builds the SVG view model.

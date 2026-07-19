@@ -71,6 +71,8 @@ func newStatsChartEnv(t *testing.T) *statsChartEnv {
 	r := chi.NewRouter()
 	r.Get("/dashboard/links/{id}/stats", statsHandler.Show)
 	r.Get("/dashboard/links/{id}/stats/chart", statsHandler.Chart)
+	// Governing: SPEC-0021 REQ "CSV Export" — session-authenticated export route
+	r.Get("/dashboard/links/{id}/stats/export", statsHandler.Export)
 
 	return &statsChartEnv{router: r, db: db, owner: owner, recipient: recipient, link: link}
 }

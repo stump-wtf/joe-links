@@ -119,6 +119,9 @@ func NewRouter(deps Deps) http.Handler {
 		r.Get("/dashboard/links/{id}/stats", statsHandler.Show)
 		// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021 — HTMX window-toggle chart fragment
 		r.Get("/dashboard/links/{id}/stats/chart", statsHandler.Chart)
+		// Governing: SPEC-0021 REQ "CSV Export", ADR-0021 — session-authenticated
+		// twin of the PAT-only /api/v1 export route, backing the stats-page button
+		r.Get("/dashboard/links/{id}/stats/export", statsHandler.Export)
 		// Governing: SPEC-0013 REQ "DaisyUI Delete Confirmation Modal"
 		r.Get("/dashboard/links/{id}/confirm-delete", links.ConfirmDelete)
 		r.Put("/dashboard/links/{id}", links.Update)
