@@ -20,14 +20,16 @@ import (
 // LinkForm holds form input values for creating or editing a link.
 // Governing: SPEC-0010 REQ "Visibility Selector in Link Forms"
 // Governing: SPEC-0020 REQ "Link Expiration" — optional expiration input, empty by default
+// Governing: SPEC-0020 REQ "Destination Health Checking" — Eligibility (per-link opt-out on the link form)
 type LinkForm struct {
-	Slug        string
-	URL         string
-	Title       string
-	Description string
-	Tags        string // comma-separated tag names
-	Visibility  string // public, private, or secure
-	ExpiresAt   string // datetime-local value (UTC), empty = never expires
+	Slug                 string
+	URL                  string
+	Title                string
+	Description          string
+	Tags                 string // comma-separated tag names
+	Visibility           string // public, private, or secure
+	ExpiresAt            string // datetime-local value (UTC), empty = never expires
+	HealthChecksDisabled bool   // checkbox: opt this link out of destination health checks
 }
 
 // LinkFormPage is the template data for the new/edit link forms.
@@ -57,6 +59,12 @@ type LinkDetailPage struct {
 	CanEdit   bool // Edit button
 	CanDelete bool // Delete button + confirm modal
 	CanManage bool // owner add/remove controls and the shares panel
+	// Health is the derived destination-health view, already subject to the
+	// SPEC-0020 surfacing rule (archived/expired/opted-out report unchecked
+	// with null details). Every viewer of this page holds CanView, so health
+	// information may render.
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+	Health store.HealthView
 }
 
 // ShareUser combines share record with user display info for templates.
@@ -125,6 +133,10 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Tags:        r.FormValue("tags"),
 		Visibility:  visibility,
 		ExpiresAt:   r.FormValue("expires_at"),
+		// Checkbox semantics: present when checked, absent when not — the
+		// create form always submits the rest of its fields.
+		// Governing: SPEC-0020 REQ "Destination Health Checking" — Eligibility
+		HealthChecksDisabled: r.FormValue("health_checks_disabled") != "",
 	}
 
 	// Optional expiration: empty means never expires; a past value is rejected
@@ -221,7 +233,7 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// rolls back the link too, so it re-renders the form with an error instead
 	// of silently dropping the tags (issue #198).
 	// Governing: SPEC-0004 REQ "New Link Form" — link+tags create atomically; ADR-0018
-	_, err := h.links.CreateFull(r.Context(), form.Slug, form.URL, user.ID, form.Title, form.Description, form.Visibility, expiresAt, tagNames, nil, "")
+	created, err := h.links.CreateFull(r.Context(), form.Slug, form.URL, user.ID, form.Title, form.Description, form.Visibility, expiresAt, tagNames, nil, "")
 	if err != nil {
 		msg := "Could not create the link. Please try again."
 		if errors.Is(err, store.ErrSlugTaken) {
@@ -242,6 +254,28 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		render(w, "new.html", data)
 		return
+	}
+
+	// Optional health-check opt-out on create: the creator is the primary
+	// owner, so the CanEdit authorization is held by construction — matching
+	// POST /api/v1/links and the MCP create_link tool. A failure here leaves
+	// the link created with checks enabled (the default); it MUST surface to
+	// the user rather than closing the modal as a clean success — the same
+	// partial-failure contract as the edit form's opt-out and tag writes
+	// (issue #198), so no surface silently drops the checkbox.
+	// Governing: SPEC-0020 REQ "Destination Health Checking" — Eligibility,
+	// REQ "Lifecycle State in API and MCP"
+	if form.HealthChecksDisabled {
+		if _, err := h.links.SetHealthChecksDisabled(r.Context(), created.ID, true); err != nil {
+			log.Printf("set health-check opt-out for link %s: %v", created.ID, err)
+			data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Form: form, Error: "The link was created, but health checks could not be disabled for it. You can turn them off on the edit form."}
+			if isHTMX(r) {
+				renderFragment(w, "new_link_modal", data)
+				return
+			}
+			render(w, "new.html", data)
+			return
+		}
 	}
 
 	// Governing: SPEC-0013 REQ "Create/Edit Link Form as HTMX Modal" — close modal + trigger list refresh
@@ -295,6 +329,8 @@ func (h *LinksHandler) Edit(w http.ResponseWriter, r *http.Request) {
 		// links stay editable) and is clearable on edit.
 		// Governing: SPEC-0020 REQ "Link Expiration"
 		ExpiresAt: formatExpiresAtForm(link.ExpiresAt),
+		// Governing: SPEC-0020 REQ "Destination Health Checking" — Eligibility
+		HealthChecksDisabled: link.HealthChecksDisabled,
 	}
 
 	data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form}
@@ -348,6 +384,11 @@ func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Tags:        r.FormValue("tags"),
 		Visibility:  visibility,
 		ExpiresAt:   r.FormValue("expires_at"),
+		// Checkbox semantics: the edit form always submits its fields, so an
+		// absent checkbox means "checks enabled" (false), and only owners,
+		// co-owners, and admins reach this handler (IsOwnerOrAdmin gate).
+		// Governing: SPEC-0020 REQ "Destination Health Checking" — Eligibility
+		HealthChecksDisabled: r.FormValue("health_checks_disabled") != "",
 	}
 
 	// Expiration: the edit form always submits the field — empty clears it,
@@ -445,6 +486,23 @@ func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		render(w, "edit.html", data)
 		return
+	}
+
+	// Health-check opt-out toggle, an ordinary edit under the same gate as
+	// the rest of the form; only written when the value actually changed.
+	// Governing: SPEC-0020 REQ "Destination Health Checking" — Eligibility,
+	// scenario "Opt-Out Honored"
+	if form.HealthChecksDisabled != link.HealthChecksDisabled {
+		if _, err := h.links.SetHealthChecksDisabled(r.Context(), id, form.HealthChecksDisabled); err != nil {
+			log.Printf("set health-check opt-out for link %s: %v", id, err)
+			data := LinkFormPage{BasePage: newBasePage(r, user), User: user, Link: link, Form: form, Error: "The link was saved, but the health-check setting could not be updated. Please try again."}
+			if isHTMX(r) {
+				renderFragment(w, "edit_link_modal", data)
+				return
+			}
+			render(w, "edit.html", data)
+			return
+		}
 	}
 
 	// Update tags. A failed tag write must surface to the user, not be
@@ -608,6 +666,14 @@ func (h *LinksHandler) Renew(w http.ResponseWriter, r *http.Request) {
 	// misalign every cell after the missing one.
 	// Governing: SPEC-0020 REQ "Renewal" scenario "One-Click Renew Clears Expiry"
 	if isHTMX(r) {
+		// The renewed row is active again, so its health state surfaces: a
+		// still-broken destination keeps its badge through the swap.
+		// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+		healthStates, err := buildHealthStates(r.Context(), h.links, []*store.Link{renewed},
+			map[string]store.LinkCaps{renewed.ID: caps}, time.Now().UTC())
+		if err != nil {
+			healthStates = nil
+		}
 		ctxData := DashboardPage{
 			BasePage:       newBasePage(r, user),
 			User:           user,
@@ -615,6 +681,7 @@ func (h *LinksHandler) Renew(w http.ResponseWriter, r *http.Request) {
 			ShowVisibility: true,
 			ShowActions:    true,
 			ShowLifecycle:  true,
+			HealthStates:   healthStates,
 			RowCaps:        map[string]store.LinkCaps{link.ID: caps},
 		}
 		renderFragment(w, "link_row", map[string]any{"Link": renewed, "Ctx": ctxData})

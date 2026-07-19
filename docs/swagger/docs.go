@@ -530,7 +530,7 @@ const docTemplate = `{
                         "BearerToken": []
                     }
                 ],
-                "description": "Updates url, title, description, tags, visibility, expiration, and archive state. Slug is immutable and ignored. A body containing only \"archived\" toggles the archive state without altering any other field; combining \"archived\" with other fields is a full update and requires url.",
+                "description": "Updates url, title, description, tags, visibility, expiration, archive state, and the health-check opt-out. Slug is immutable and ignored. A body containing only toggle fields (\"archived\" and/or \"health_checks_disabled\") applies those toggles without altering any other field; combining them with other fields is a full update and requires url.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1699,6 +1699,9 @@ const docTemplate = `{
                 "expires_at": {
                     "type": "string"
                 },
+                "health_checks_disabled": {
+                    "type": "boolean"
+                },
                 "slug": {
                     "type": "string"
                 },
@@ -1792,6 +1795,10 @@ const docTemplate = `{
                 },
                 "health": {
                     "$ref": "#/definitions/internal_api.HealthResponse"
+                },
+                "health_checks_disabled": {
+                    "description": "HealthChecksDisabled is the per-link checker opt-out, serialized (like\nthe health object) only for callers holding capabilities on the link.\nGoverning: SPEC-0020 REQ \"Lifecycle State in API and MCP\"",
+                    "type": "boolean"
                 },
                 "id": {
                     "type": "string"
@@ -2050,6 +2057,9 @@ const docTemplate = `{
                     "type": "string",
                     "format": "date-time",
                     "x-nullable": true
+                },
+                "health_checks_disabled": {
+                    "type": "boolean"
                 },
                 "tags": {
                     "type": "array",

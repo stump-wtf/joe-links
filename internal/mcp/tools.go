@@ -47,11 +47,11 @@ type ownerPayload struct {
 }
 
 // healthPayload mirrors the REST HealthResponse shape byte-for-byte so the
-// two surfaces can never disagree on the health object. Until the destination
-// health checker lands (story #274 — the link_health table), every link's
-// derived state is "unchecked" with null details: absence of a health row
-// means "never checked". Present only for callers holding capabilities on the
-// link.
+// two surfaces can never disagree on the health object. Status is derived
+// from the link_health table in the shared store layer, subject to the
+// surfacing rule: opted-out, archived, and expired links report "unchecked"
+// with null details even when a frozen health row exists. Present only for
+// callers holding capabilities on the link.
 // Governing: SPEC-0020 REQ "Lifecycle State in API and MCP", REQ "Destination Health Checking"
 type healthPayload struct {
 	Status        string     `json:"status" jsonschema:"unchecked, ok, broken, or skipped"`
@@ -59,13 +59,36 @@ type healthPayload struct {
 	LastStatus    *int       `json:"last_status"`
 }
 
-// uncheckedHealth returns the health object for a link with no recorded checks.
-func uncheckedHealth() *healthPayload {
-	return &healthPayload{Status: store.HealthUnchecked}
+// healthFor derives the capability-gated health object for a link. Returns
+// (nil, nil, nil) when the caller holds no capabilities — such callers never
+// receive the health object or the opt-out flag, matching REST.
+// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" scenario
+// "Non-Capable Caller Gets No Health Data"
+func healthFor(ctx context.Context, deps Deps, link *store.Link, includeHealth bool) (*healthPayload, *bool, error) {
+	if !includeHealth {
+		return nil, nil, nil
+	}
+	hRow, err := deps.LinkStore.GetHealth(ctx, link.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load link health: %w", err)
+	}
+	view := store.DeriveHealth(link, hRow, time.Now().UTC())
+	disabled := link.HealthChecksDisabled
+	return &healthPayload{
+		Status:        view.Status,
+		LastCheckedAt: view.LastCheckedAt,
+		LastStatus:    view.LastStatus,
+	}, &disabled, nil
 }
 
 // linkPayload is the structured result for tools returning a full link.
 // ShortURL is always populated so agents can hand humans a working URL.
+//
+// Serialization convention (recorded per the PR #290 debt ledger): MCP
+// payloads use omitempty for the nullable lifecycle timestamps — an ABSENT
+// expires_at/archived_at means null — where REST serializes explicit nulls.
+// The REQ's "same lifecycle fields" holds semantically; absent-means-null is
+// the pinned MCP wire convention (internal/mcp/lifecycle_test.go, PR #283).
 // Governing: SPEC-0018 REQ "Tool Inventory" — short URL in create/get/update results
 type linkPayload struct {
 	ID             string         `json:"id"`
@@ -75,32 +98,37 @@ type linkPayload struct {
 	Title          string         `json:"title,omitempty"`
 	Description    string         `json:"description,omitempty"`
 	Visibility     string         `json:"visibility"`
-	ExpiresAt      *time.Time     `json:"expires_at,omitempty" jsonschema:"RFC 3339 expiration timestamp; absent means the link never expires"`  // Governing: SPEC-0020 REQ "Link Expiration"
-	ArchivedAt     *time.Time     `json:"archived_at,omitempty" jsonschema:"RFC 3339 archive timestamp; absent means the link is not archived"`  // Governing: SPEC-0020 REQ "Archive State"
-	LifecycleState string         `json:"lifecycle_state" jsonschema:"derived lifecycle state: active, expired, or archived"`                    // Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+	ExpiresAt      *time.Time     `json:"expires_at,omitempty" jsonschema:"RFC 3339 expiration timestamp; absent means the link never expires"`     // Governing: SPEC-0020 REQ "Link Expiration"
+	ArchivedAt     *time.Time     `json:"archived_at,omitempty" jsonschema:"RFC 3339 archive timestamp; absent means the link is not archived"`     // Governing: SPEC-0020 REQ "Archive State"
+	LifecycleState string         `json:"lifecycle_state" jsonschema:"derived lifecycle state: active, expired, or archived"`                       // Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
 	Health         *healthPayload `json:"health,omitempty" jsonschema:"destination health; present only for callers with capabilities on the link"` // Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
-	Tags           []string       `json:"tags,omitempty"`
-	Owners         []ownerPayload `json:"owners,omitempty"`
-	SharedWith     []string       `json:"shared_with,omitempty" jsonschema:"emails with share access; only populated for owners/admins"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	// HealthChecksDisabled is the per-link checker opt-out, present (like the
+	// health object) only for callers holding capabilities on the link.
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+	HealthChecksDisabled *bool          `json:"health_checks_disabled,omitempty" jsonschema:"per-link health-check opt-out; present only for callers with capabilities on the link"`
+	Tags                 []string       `json:"tags,omitempty"`
+	Owners               []ownerPayload `json:"owners,omitempty"`
+	SharedWith           []string       `json:"shared_with,omitempty" jsonschema:"emails with share access; only populated for owners/admins"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
 }
 
 // listItemPayload is the compact per-row shape for list_links. It carries the
 // same lifecycle and (capability-gated) health fields as get_link.
 // Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
 type listItemPayload struct {
-	ID             string         `json:"id"`
-	Slug           string         `json:"slug"`
-	ShortURL       string         `json:"short_url"`
-	URL            string         `json:"url"`
-	Title          string         `json:"title,omitempty"`
-	Description    string         `json:"description,omitempty"`
-	Visibility     string         `json:"visibility"`
-	ExpiresAt      *time.Time     `json:"expires_at,omitempty"`
-	ArchivedAt     *time.Time     `json:"archived_at,omitempty"`
-	LifecycleState string         `json:"lifecycle_state"`
-	Health         *healthPayload `json:"health,omitempty"`
+	ID                   string         `json:"id"`
+	Slug                 string         `json:"slug"`
+	ShortURL             string         `json:"short_url"`
+	URL                  string         `json:"url"`
+	Title                string         `json:"title,omitempty"`
+	Description          string         `json:"description,omitempty"`
+	Visibility           string         `json:"visibility"`
+	ExpiresAt            *time.Time     `json:"expires_at,omitempty"`
+	ArchivedAt           *time.Time     `json:"archived_at,omitempty"`
+	LifecycleState       string         `json:"lifecycle_state"`
+	Health               *healthPayload `json:"health,omitempty"`
+	HealthChecksDisabled *bool          `json:"health_checks_disabled,omitempty"`
 }
 
 // registerTools registers the SPEC-0018 v1 tool inventory — exactly these
@@ -125,7 +153,7 @@ func registerTools(s *sdk.Server, deps Deps) {
 
 	addTool(s, &sdk.Tool{
 		Name:        "update_link",
-		Description: "Update url, title, description, tags, visibility, expiration, or archive state on a link you own. Omitted fields are left unchanged; slug is immutable. Pass expires_at as null or an empty string to clear the expiration. Pass archived true/false to archive or unarchive (the slug stays reserved and stats are kept either way).",
+		Description: "Update url, title, description, tags, visibility, expiration, archive state, or the health-check opt-out on a link you own. Omitted fields are left unchanged; slug is immutable. Pass expires_at as null or an empty string to clear the expiration. Pass archived true/false to archive or unarchive (the slug stays reserved and stats are kept either way). Pass health_checks_disabled true/false to opt the destination out of (or back into) health checks.",
 	}, updateLinkTool(deps))
 
 	addTool(s, &sdk.Tool{
@@ -240,9 +268,12 @@ func buildLinkPayload(ctx context.Context, deps Deps, link *store.Link, includeS
 		CreatedAt:      link.CreatedAt,
 		UpdatedAt:      link.UpdatedAt,
 	}
-	if includeHealth {
-		p.Health = uncheckedHealth()
+	health, disabled, err := healthFor(ctx, deps, link, includeHealth)
+	if err != nil {
+		return nil, err
 	}
+	p.Health = health
+	p.HealthChecksDisabled = disabled
 
 	tags, err := deps.LinkStore.ListTags(ctx, link.ID)
 	if err != nil {
@@ -336,7 +367,10 @@ type createLinkIn struct {
 	Tags        []string `json:"tags,omitempty"`
 	Visibility  string   `json:"visibility,omitempty" jsonschema:"public, private, or secure; defaults to private (secure when share_with is set)"`
 	ExpiresAt   string   `json:"expires_at,omitempty" jsonschema:"optional RFC 3339 expiration timestamp (must be in the future); omit for a link that never expires"` // Governing: SPEC-0020 REQ "Link Expiration"
-	ShareWith   []string `json:"share_with,omitempty" jsonschema:"emails of existing users to grant access; implies secure visibility unless overridden"`
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — same
+	// health_checks_disabled input as POST /api/v1/links
+	HealthChecksDisabled bool     `json:"health_checks_disabled,omitempty" jsonschema:"true opts this link out of destination health checks"`
+	ShareWith            []string `json:"share_with,omitempty" jsonschema:"emails of existing users to grant access; implies secure visibility unless overridden"`
 }
 
 func createLinkTool(deps Deps) sdk.ToolHandlerFor[createLinkIn, *linkPayload] {
@@ -416,6 +450,16 @@ func createLinkTool(deps Deps) sdk.ToolHandlerFor[createLinkIn, *linkPayload] {
 				return errorResult(codeValidation, err.Error()), nil, nil
 			}
 			return internalError("create link", err), nil, nil
+		}
+
+		// Optional health-check opt-out on create: the creator is the primary
+		// owner, so CanEdit is held by construction — matching REST.
+		// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+		if in.HealthChecksDisabled {
+			link, err = deps.LinkStore.SetHealthChecksDisabled(ctx, link.ID, true)
+			if err != nil {
+				return internalError("set health-check opt-out", err), nil, nil
+			}
 		}
 
 		// The creator is the primary owner: shares and health both included.
@@ -499,15 +543,23 @@ func listLinksTool(deps Deps) sdk.ToolHandlerFor[listLinksIn, *listLinksOut] {
 		// includeHealth gates the health object per row: true only when the
 		// caller holds capabilities on the link, matching REST and get_link.
 		// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+		var appendErr error
 		appendLink := func(l *store.Link, includeHealth bool) {
+			if appendErr != nil {
+				return
+			}
 			item := listItemPayload{
 				ID: l.ID, Slug: l.Slug, ShortURL: shortURL(ctx, l.Slug),
 				URL: l.URL, Title: l.Title, Description: l.Description, Visibility: l.Visibility,
 				ExpiresAt: l.ExpiresAt, ArchivedAt: l.ArchivedAt, LifecycleState: l.LifecycleState(now),
 			}
-			if includeHealth {
-				item.Health = uncheckedHealth()
+			health, disabled, err := healthFor(ctx, deps, l, includeHealth)
+			if err != nil {
+				appendErr = err
+				return
 			}
+			item.Health = health
+			item.HealthChecksDisabled = disabled
 			out.Links = append(out.Links, item)
 		}
 
@@ -569,6 +621,9 @@ func listLinksTool(deps Deps) sdk.ToolHandlerFor[listLinksIn, *listLinksOut] {
 		default:
 			return errorResult(codeValidation, `filter must be "mine", "shared", or "public"`), nil, nil
 		}
+		if appendErr != nil {
+			return internalError("build link rows", appendErr), nil, nil
+		}
 
 		out.Count = len(out.Links)
 		return nil, out, nil
@@ -585,7 +640,10 @@ type updateLinkIn struct {
 	Tags        *[]string `json:"tags,omitempty" jsonschema:"replaces the full tag set; [] clears all tags"`
 	Visibility  *string   `json:"visibility,omitempty" jsonschema:"public, private, or secure"`
 	ExpiresAt   *string   `json:"expires_at,omitempty" jsonschema:"RFC 3339 expiration timestamp; null or an empty string clears the expiration; omitted leaves it unchanged"` // Governing: SPEC-0020 REQ "Link Expiration"
-	Archived    *bool     `json:"archived,omitempty" jsonschema:"true archives the link (resolution stops, slug stays reserved, stats kept); false unarchives"`               // Governing: SPEC-0020 REQ "Archive State"
+	Archived    *bool     `json:"archived,omitempty" jsonschema:"true archives the link (resolution stops, slug stays reserved, stats kept); false unarchives"`                // Governing: SPEC-0020 REQ "Archive State"
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — same
+	// health_checks_disabled input as PUT /api/v1/links/{id}
+	HealthChecksDisabled *bool `json:"health_checks_disabled,omitempty" jsonschema:"true opts this link out of destination health checks; false opts back in; omitted leaves it unchanged"`
 }
 
 // rawArgIsNull reports whether the raw tool arguments contain key with an
@@ -730,6 +788,17 @@ func updateLinkTool(deps Deps) sdk.ToolHandlerFor[updateLinkIn, *linkPayload] {
 			}
 		}
 
+		// Health-check opt-out toggle, identical to PUT /api/v1/links/{id}'s
+		// health_checks_disabled field: an ordinary edit under the same
+		// CanEdit gate; omitted leaves the stored flag unchanged.
+		// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+		if in.HealthChecksDisabled != nil {
+			updated, err = deps.LinkStore.SetHealthChecksDisabled(ctx, updated.ID, *in.HealthChecksDisabled)
+			if err != nil {
+				return internalError("update health-check opt-out", err), nil, nil
+			}
+		}
+
 		if in.Tags != nil {
 			if err := deps.LinkStore.SetTags(ctx, updated.ID, tags); err != nil {
 				// Mirror REST's TAG_WRITE_FAILED semantics: the link row is
@@ -820,7 +889,12 @@ func requireShareTarget(ctx context.Context, deps Deps, in shareIn) (*store.Link
 }
 
 func sharesResult(ctx context.Context, deps Deps, link *store.Link) (*sdk.CallToolResult, *shareOut, error) {
-	p, err := buildLinkPayload(ctx, deps, link, true, false)
+	// includeHealth=true: every caller reaching here passed the owner/admin
+	// gate and so holds capabilities on the link — the health fields are
+	// built consistently with the capability gating even though shareOut
+	// serializes only the roster (PR #290 debt ledger, item 4).
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+	p, err := buildLinkPayload(ctx, deps, link, true, true)
 	if err != nil {
 		return internalError("list shares", err), nil, nil
 	}
@@ -882,7 +956,10 @@ func addCoOwnerTool(deps Deps) sdk.ToolHandlerFor[shareIn, *coOwnerOut] {
 			}
 			return internalError("add co-owner", err), nil, nil
 		}
-		p, err := buildLinkPayload(ctx, deps, link, false, false)
+		// includeHealth=true: the caller passed the owner/admin gate, so the
+		// health fields are built consistently with the capability gating
+		// (PR #290 debt ledger, item 4).
+		p, err := buildLinkPayload(ctx, deps, link, false, true)
 		if err != nil {
 			return internalError("list owners", err), nil, nil
 		}

@@ -21,7 +21,13 @@
                  Colors match the shared link_row partial. -->
             {{$lifecycle := .Link.LifecycleState now}}
             {{if eq $lifecycle "archived"}}<span class="badge badge-neutral">archived</span>
-            {{else if eq $lifecycle "expired"}}<span class="badge badge-warning">expired</span>{{end}}
+            {{else if eq $lifecycle "expired"}}<span class="badge badge-warning">expired</span>
+            <!-- Governing: SPEC-0020 REQ "Health Badges and Admin Report" — the
+                 broken badge renders only in the active branch: an archived or
+                 expired link's frozen health row is not surfaced (surfacing
+                 rule), so only the lifecycle badge appears. Every viewer of
+                 this page holds CanView, so health information may render. -->
+            {{else if eq .Health.Status "broken"}}<span class="badge badge-error tooltip tooltip-bottom" data-tip="Destination health checks are failing">broken</span>{{end}}
         </div>
         <div class="flex gap-2">
             <a href="/dashboard/links/{{.Link.ID}}/stats" class="btn btn-sm btn-ghost">Stats</a>
@@ -87,6 +93,28 @@
                     <a href="/dashboard/tags/{{.Slug}}" class="badge badge-outline">{{.Name}}</a>
                     {{end}}
                 </div>
+            </div>
+            {{end}}
+
+            <!-- Destination health, shown to capability holders only (every
+                 viewer of this page holds CanView). Skipped destinations are
+                 flagged as not checkable under current server policy; error
+                 strings and status codes are attacker-influenced and render
+                 through html/template escaping.
+                 Governing: SPEC-0020 REQ "Health Badges and Admin Report",
+                 "Security Requirements" — Output Escaping -->
+            {{if .Link.HealthChecksDisabled}}
+            <div class="text-xs text-base-content/50 mt-2">
+                Health checks: <span class="badge badge-xs badge-ghost">opted out</span>
+            </div>
+            {{else if ne .Health.Status "unchecked"}}
+            <div class="text-xs text-base-content/50 mt-2">
+                Health:
+                {{if eq .Health.Status "broken"}}<span class="badge badge-xs badge-error">broken</span>
+                {{else if eq .Health.Status "skipped"}}<span class="badge badge-xs badge-ghost">not checkable under current server policy</span>
+                {{else}}<span class="badge badge-xs badge-success">ok</span>{{end}}
+                {{if .Health.LastStatus}}&middot; last status {{.Health.LastStatus}}{{end}}
+                {{if .Health.LastCheckedAt}}&middot; checked {{.Health.LastCheckedAt.UTC.Format "Jan 2, 2006 3:04 PM"}} UTC{{end}}
             </div>
             {{end}}
 

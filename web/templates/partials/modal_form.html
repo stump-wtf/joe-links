@@ -115,6 +115,14 @@
                 >
             </div>
 
+            <!-- Governing: SPEC-0020 REQ "Destination Health Checking" — per-link opt-out on the link form -->
+            <div class="form-control mb-4">
+                <label class="label cursor-pointer justify-start gap-3">
+                    <input type="checkbox" name="health_checks_disabled" value="1" class="checkbox checkbox-sm" {{if .Form.HealthChecksDisabled}}checked{{end}}>
+                    <span class="label-text">Skip destination health checks</span>
+                </label>
+            </div>
+
             <div class="form-control mb-6">
                 <label class="label">
                     <span class="label-text">Tags</span>
@@ -256,6 +264,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     class="input input-bordered"
                     value="{{.Form.ExpiresAt}}"
                 >
+            </div>
+
+            <!-- Governing: SPEC-0020 REQ "Destination Health Checking" — per-link opt-out, editable with CanEdit -->
+            <div class="form-control mb-4">
+                <label class="label cursor-pointer justify-start gap-3">
+                    <input type="checkbox" name="health_checks_disabled" value="1" class="checkbox checkbox-sm" {{if .Form.HealthChecksDisabled}}checked{{end}}>
+                    <span class="label-text">Skip destination health checks</span>
+                </label>
             </div>
 
             <div class="form-control mb-6">

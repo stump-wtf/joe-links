@@ -88,7 +88,20 @@ func TestLinkRowRenders_AdminAndDashboard(t *testing.T) {
 func TestAdminEditRowRenders(t *testing.T) {
 	link := sampleAdminLink()
 	r := httptest.NewRequest("GET", "/admin/links/1/edit", nil)
-	data := adminLinkRowData(r, link)
+	// Built inline: adminLinkRowData is now an AdminHandler method (it also
+	// derives the row's health state), and this is a pure render test.
+	data := AdminLinkRowData{
+		Link: link,
+		Ctx: AdminLinksPage{
+			BasePage:       newBasePage(r, nil),
+			ShowTitle:      true,
+			ShowOwner:      true,
+			ShowTags:       true,
+			ShowVisibility: true,
+			ShowActions:    true,
+			ShowLifecycle:  true,
+		},
+	}
 	rr := httptest.NewRecorder()
 	renderPageFragment(rr, "admin/links.html", "admin_link_edit_row", data)
 	body := rr.Body.String()

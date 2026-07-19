@@ -4,6 +4,7 @@ package handler
 import (
 	"html/template"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/joestump/joe-links/internal/auth"
@@ -43,6 +44,10 @@ type TagDetailPage struct {
 	// ShowLifecycle gates the expired/archived badge to capability surfaces.
 	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
 	ShowLifecycle bool
+	// HealthStates maps link ID → derived destination-health state for rows
+	// the viewer holds capabilities on, powering the "broken" badge.
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+	HealthStates map[string]string
 	// RowCaps maps link ID → the viewer's capabilities for that row; tag lists
 	// show all visible links, and visible ≠ editable.
 	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering"
@@ -117,6 +122,16 @@ func (h *TagsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-row derived health for the "broken" badge, restricted to rows the
+	// viewer holds capabilities on — tag lists mix capable and merely-visible
+	// rows, and health is capability-gated information.
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+	healthStates, err := buildHealthStates(r.Context(), h.links, links, rowCaps, time.Now().UTC())
+	if err != nil {
+		http.Error(w, "could not load links", http.StatusInternalServerError)
+		return
+	}
+
 	data := TagDetailPage{
 		BasePage:       newBasePage(r, user),
 		Tag:            tag,
@@ -129,6 +144,7 @@ func (h *TagsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		// The tag browser is authenticated (/dashboard/tags/*) — a capability
 		// surface under SPEC-0010's list filtering, so lifecycle badges render.
 		ShowLifecycle: true,
+		HealthStates:  healthStates,
 		RowCaps:       rowCaps,
 	}
 	if isHTMX(r) {

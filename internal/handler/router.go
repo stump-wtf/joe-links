@@ -172,6 +172,10 @@ func NewRouter(deps Deps) http.Handler {
 		r.Put("/admin/links/{id}", admin.UpdateLink)
 		r.Get("/admin/links/{id}/confirm-delete", admin.ConfirmDeleteLink)
 		r.Delete("/admin/links/{id}", admin.DeleteLink)
+		// Governing: SPEC-0020 REQ "Health Badges and Admin Report" — admin
+		// report of failing links; Session + admin role (the health report
+		// spans all users' links).
+		r.Get("/admin/link-health", admin.LinkHealth)
 
 		// Governing: SPEC-0008 REQ "Keyword Host Discovery", ADR-0011
 		r.Get("/admin/keywords", keywordsHandler.Index)

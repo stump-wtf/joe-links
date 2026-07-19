@@ -1,5 +1,6 @@
 // Governing: SPEC-0001 REQ "CLI Entrypoint", "Go HTTP Server", ADR-0004
 // Governing: SPEC-0016 REQ "Click Recording", REQ "Prometheus Metrics Endpoint", ADR-0016
+// Governing: SPEC-0020 REQ "Destination Health Checking", ADR-0020
 package main
 
 import (
@@ -17,6 +18,7 @@ import (
 	"github.com/joestump/joe-links/internal/config"
 	"github.com/joestump/joe-links/internal/db"
 	"github.com/joestump/joe-links/internal/handler"
+	"github.com/joestump/joe-links/internal/health"
 	"github.com/joestump/joe-links/internal/llm"
 	"github.com/joestump/joe-links/internal/metrics"
 	"github.com/joestump/joe-links/internal/store"
@@ -73,6 +75,28 @@ func newServeCmd() *cobra.Command {
 			// Governing: SPEC-0016 REQ "Prometheus Metrics Endpoint", ADR-0016
 			go runGaugeUpdater(ctx, linkStore, userStore)
 
+			// Destination health checker: an in-process goroutine following
+			// the click-writer graceful-shutdown pattern — started with the
+			// signal-aware context, its done channel awaited (bounded) after
+			// the server drains so an in-flight probe write cannot race the
+			// deferred database.Close. When disabled by config, Run returns
+			// immediately and no health data is ever written.
+			// Governing: SPEC-0020 REQ "Destination Health Checking", ADR-0020 (c)
+			checker := health.New(linkStore, health.Config{
+				Enabled:      cfg.Health.Enabled,
+				Interval:     cfg.Health.Interval,
+				Timeout:      cfg.Health.Timeout,
+				AllowPrivate: cfg.Health.AllowPrivate,
+			})
+			if cfg.Health.Enabled {
+				log.Printf("destination health checker enabled (interval: %s)", cfg.Health.Interval)
+			}
+			checkerDone := make(chan struct{})
+			go func() {
+				defer close(checkerDone)
+				checker.Run(ctx)
+			}()
+
 			// Governing: SPEC-0017 REQ "LLM Provider Configuration", ADR-0017
 			suggester, err := llm.New(cfg)
 			if err != nil {
@@ -112,7 +136,18 @@ func newServeCmd() *cobra.Command {
 			}
 
 			log.Printf("listening on %s", cfg.HTTP.Addr)
-			return serveAndDrain(ctx, srv, ln, clickCh, writerDone, 30*time.Second)
+			err = serveAndDrain(ctx, srv, ln, clickCh, writerDone, 30*time.Second)
+
+			// Await the checker like the click writer: probes carry ctx (now
+			// cancelled), so this normally returns immediately; the timeout
+			// bounds a wedged in-flight store write.
+			// Governing: SPEC-0020 REQ "Destination Health Checking", ADR-0020 (c)
+			select {
+			case <-checkerDone:
+			case <-time.After(30 * time.Second):
+				log.Printf("health checker: shutdown timed out after 30s")
+			}
+			return err
 		},
 	}
 }

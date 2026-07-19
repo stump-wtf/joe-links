@@ -37,6 +37,14 @@ type Config struct {
 		BaseURL  string // override for openai-compatible providers
 		Prompt   string // custom prompt template text (overrides built-in default)
 	}
+	// Health configures the destination health checker goroutine.
+	// Governing: SPEC-0020 REQ "Destination Health Checking", ADR-0020
+	Health struct {
+		Enabled      bool          // JOE_HEALTH_CHECKS_ENABLED (default true); false = goroutine never starts
+		Interval     time.Duration // JOE_HEALTH_CHECK_INTERVAL (default 24h, minimum enforced 1h)
+		Timeout      time.Duration // JOE_HEALTH_CHECK_TIMEOUT (default 10s, maximum enforced 30s)
+		AllowPrivate bool          // JOE_HEALTH_CHECK_ALLOW_PRIVATE (default false) — operator-level SSRF escape hatch
+	}
 }
 
 // Load reads config from environment (JOE_ prefix) and optional joe-links.yaml.
@@ -52,6 +60,11 @@ func Load() (*Config, error) {
 
 	v.SetDefault("http.addr", ":8080")
 	v.SetDefault("session.lifetime", "720h")
+	// Governing: SPEC-0020 REQ "Destination Health Checking" — config defaults
+	v.SetDefault("health_checks.enabled", true)
+	v.SetDefault("health_check.interval", "24h")
+	v.SetDefault("health_check.timeout", "10s")
+	v.SetDefault("health_check.allow_private", false)
 
 	cfg := &Config{}
 	cfg.HTTP.Addr = v.GetString("http.addr")
@@ -87,6 +100,33 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid JOE_SESSION_LIFETIME: %w", err)
 	}
 	cfg.SessionLifetime = lifetime
+
+	// Health checker config. The interval floor and timeout ceiling are
+	// normative politeness bounds and MUST NOT be relaxable by configuration,
+	// so out-of-range values are clamped rather than honored.
+	// Governing: SPEC-0020 REQ "Destination Health Checking", "Security
+	// Requirements" — Rate Limiting and Abuse
+	cfg.Health.Enabled = v.GetBool("health_checks.enabled")
+	cfg.Health.AllowPrivate = v.GetBool("health_check.allow_private")
+	interval, err := time.ParseDuration(v.GetString("health_check.interval"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid JOE_HEALTH_CHECK_INTERVAL: %w", err)
+	}
+	if interval < time.Hour {
+		interval = time.Hour
+	}
+	cfg.Health.Interval = interval
+	timeout, err := time.ParseDuration(v.GetString("health_check.timeout"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid JOE_HEALTH_CHECK_TIMEOUT: %w", err)
+	}
+	if timeout > 30*time.Second {
+		timeout = 30 * time.Second
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	cfg.Health.Timeout = timeout
 
 	if cfg.DB.Driver == "" {
 		return nil, fmt.Errorf("JOE_DB_DRIVER is required (sqlite3, mysql, postgres)")

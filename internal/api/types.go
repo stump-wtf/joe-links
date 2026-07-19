@@ -46,9 +46,9 @@ type OwnerResponse struct {
 
 // HealthResponse is the destination-health object attached to link resources
 // for callers holding capabilities on the link (owners, co-owners, admins,
-// share recipients). Until the destination health checker lands (story #274 —
-// the link_health table), every link's derived state is "unchecked" with null
-// details: absence of a health row means "never checked".
+// share recipients). Status is derived from the link_health table subject to
+// the surfacing rule: for opted-out, archived, or expired links it reports
+// "unchecked" with null details even when a frozen health row exists.
 // Governing: SPEC-0020 REQ "Lifecycle State in API and MCP", REQ "Destination Health Checking"
 type HealthResponse struct {
 	Status        string     `json:"status" enums:"unchecked,ok,broken,skipped"`
@@ -72,10 +72,14 @@ type LinkResponse struct {
 	ArchivedAt     *time.Time      `json:"archived_at"`
 	LifecycleState string          `json:"lifecycle_state" enums:"active,expired,archived"`
 	Health         *HealthResponse `json:"health,omitempty"`
-	Tags           []string        `json:"tags"`
-	Owners         []OwnerResponse `json:"owners"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	// HealthChecksDisabled is the per-link checker opt-out, serialized (like
+	// the health object) only for callers holding capabilities on the link.
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
+	HealthChecksDisabled *bool           `json:"health_checks_disabled,omitempty"`
+	Tags                 []string        `json:"tags"`
+	Owners               []OwnerResponse `json:"owners"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
 }
 
 // LinkListResponse wraps a paginated list of links.
@@ -88,14 +92,17 @@ type LinkListResponse struct {
 // CreateLinkRequest is the body for POST /api/v1/links.
 // Governing: SPEC-0005 REQ "Links Collection", SPEC-0010 REQ "REST API Visibility Field"
 // Governing: SPEC-0020 REQ "Link Expiration" — omitting expires_at on create yields NULL
+// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — optional
+// health_checks_disabled accepted under the same CanEdit authorization
 type CreateLinkRequest struct {
-	Slug        string     `json:"slug"`
-	URL         string     `json:"url"`
-	Title       string     `json:"title,omitempty"`
-	Description string     `json:"description,omitempty"`
-	Visibility  string     `json:"visibility,omitempty"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	Tags        []string   `json:"tags,omitempty"`
+	Slug                 string     `json:"slug"`
+	URL                  string     `json:"url"`
+	Title                string     `json:"title,omitempty"`
+	Description          string     `json:"description,omitempty"`
+	Visibility           string     `json:"visibility,omitempty"`
+	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
+	HealthChecksDisabled *bool      `json:"health_checks_disabled,omitempty"`
+	Tags                 []string   `json:"tags,omitempty"`
 }
 
 // UpdateLinkRequest is the body for PUT /api/v1/links/{id}.
@@ -103,16 +110,20 @@ type CreateLinkRequest struct {
 // Governing: SPEC-0010 REQ "REST API Visibility Field"
 // Governing: SPEC-0020 REQ "Link Expiration" — expires_at omitted = unchanged, null = clear
 // Governing: SPEC-0020 REQ "Archive State" — archived true sets archived_at
-// (if not already set), false clears it; a body with only "archived" toggles
-// archive state without performing the full-resource update
+// (if not already set), false clears it; a body containing only toggle fields
+// (archived and/or health_checks_disabled) applies the toggles without
+// performing the full-resource update
+// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" —
+// health_checks_disabled accepted under the same CanEdit authorization
 type UpdateLinkRequest struct {
-	URL         string       `json:"url"`
-	Title       string       `json:"title,omitempty"`
-	Description string       `json:"description,omitempty"`
-	Visibility  string       `json:"visibility,omitempty"`
-	ExpiresAt   OptionalTime `json:"expires_at,omitempty" swaggertype:"string" format:"date-time" extensions:"x-nullable"`
-	Archived    *bool        `json:"archived,omitempty"`
-	Tags        []string     `json:"tags,omitempty"`
+	URL                  string       `json:"url"`
+	Title                string       `json:"title,omitempty"`
+	Description          string       `json:"description,omitempty"`
+	Visibility           string       `json:"visibility,omitempty"`
+	ExpiresAt            OptionalTime `json:"expires_at,omitempty" swaggertype:"string" format:"date-time" extensions:"x-nullable"`
+	Archived             *bool        `json:"archived,omitempty"`
+	HealthChecksDisabled *bool        `json:"health_checks_disabled,omitempty"`
+	Tags                 []string     `json:"tags,omitempty"`
 }
 
 // AddOwnerRequest is the body for POST /api/v1/links/{id}/owners.

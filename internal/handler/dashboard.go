@@ -7,6 +7,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/joestump/joe-links/internal/auth"
 	"github.com/joestump/joe-links/internal/store"
@@ -33,6 +34,11 @@ type DashboardPage struct {
 	// public browser and profile pages must not disclose lifecycle state.
 	// Governing: SPEC-0020 REQ "Expired Link Resolution", REQ "Health Badges and Admin Report"
 	ShowLifecycle bool
+	// HealthStates maps link ID → derived destination-health state for rows
+	// the viewer holds capabilities on; nil on public surfaces, which must
+	// never display health information.
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+	HealthStates map[string]string
 	// RowCaps maps link ID → the viewer's capabilities for that row, so lists
 	// mixing rows with differing rights (e.g. ?filter=shared) never render
 	// dead action buttons.
@@ -82,6 +88,23 @@ func (h *DashboardHandler) Show(w http.ResponseWriter, r *http.Request) {
 	// Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — "Shared with me" filter
 	case filter == "shared":
 		links, err = h.links.ListSharedWithUser(r.Context(), user.ID)
+	// Staleness views, computed from link_clicks at query time in the store
+	// layer over the viewer's own dashboard scope (all links for admins,
+	// owned links otherwise). Archived links are out of scope.
+	// Governing: SPEC-0020 REQ "Staleness Views" scenarios "Stale Filter",
+	// "Never-Clicked Filter", "Staleness Respects Visibility Scope"
+	case filter == "stale":
+		if user.IsAdmin() {
+			links, err = h.links.ListStaleAll(r.Context(), time.Now().UTC())
+		} else {
+			links, err = h.links.ListStaleByOwner(r.Context(), user.ID, time.Now().UTC())
+		}
+	case filter == "never-clicked":
+		if user.IsAdmin() {
+			links, err = h.links.ListNeverClickedAll(r.Context(), time.Now().UTC())
+		} else {
+			links, err = h.links.ListNeverClickedByOwner(r.Context(), user.ID, time.Now().UTC())
+		}
 	case tagSlug != "":
 		// Tag filter takes precedence
 		if user.IsAdmin() {
@@ -122,6 +145,17 @@ func (h *DashboardHandler) Show(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-row derived health for the "broken" badge. Every dashboard row is
+	// one the viewer holds capabilities on (owned, shared, or admin), and the
+	// capability gate is enforced per row anyway.
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report" scenario
+	// "Broken Badge on Owner Dashboard"
+	healthStates, err := buildHealthStates(r.Context(), h.links, links, rowCaps, time.Now().UTC())
+	if err != nil {
+		http.Error(w, "could not load links", http.StatusInternalServerError)
+		return
+	}
+
 	data := DashboardPage{
 		BasePage: newBasePage(r, user),
 		User:     user,
@@ -139,6 +173,7 @@ func (h *DashboardHandler) Show(w http.ResponseWriter, r *http.Request) {
 		// Sees Expired Badge on Dashboard" — the dashboard is a capability
 		// surface; lifecycle badges render here.
 		ShowLifecycle: true,
+		HealthStates:  healthStates,
 		RowCaps:       rowCaps,
 	}
 

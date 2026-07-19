@@ -22,8 +22,11 @@
 </div>
 
 <!-- Governing: SPEC-0010 REQ "Dashboard Visibility Filtering" — My Links / Shared with me tabs -->
+<!-- Governing: SPEC-0020 REQ "Staleness Views" — stale / never-clicked filters
+     over the viewer's own dashboard scope, computed from link_clicks at query
+     time in the store layer; archived links are out of scope. -->
 <div class="tabs tabs-boxed mb-6 w-fit">
-    <a class="tab {{if ne .Filter "shared"}}tab-active{{end}}"
+    <a class="tab {{if not .Filter}}tab-active{{end}}"
        hx-get="/dashboard"
        hx-target="#link-list"
        hx-push-url="false">My Links</a>
@@ -31,6 +34,16 @@
        hx-get="/dashboard?filter=shared"
        hx-target="#link-list"
        hx-push-url="false">Shared with me</a>
+    <a class="tab tooltip tooltip-bottom {{if eq .Filter "stale"}}tab-active{{end}}"
+       data-tip="Created over 90 days ago, no clicks in the last 90 days"
+       hx-get="/dashboard?filter=stale"
+       hx-target="#link-list"
+       hx-push-url="false">Stale</a>
+    <a class="tab tooltip tooltip-bottom {{if eq .Filter "never-clicked"}}tab-active{{end}}"
+       data-tip="Created over 7 days ago, never clicked"
+       hx-get="/dashboard?filter=never-clicked"
+       hx-target="#link-list"
+       hx-push-url="false">Never clicked</a>
 </div>
 
 <!-- Governing: SPEC-0004 REQ "User Dashboard" — tag filter chips -->

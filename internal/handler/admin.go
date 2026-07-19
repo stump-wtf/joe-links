@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/joestump/joe-links/internal/auth"
@@ -61,6 +62,10 @@ type AdminLinksPage struct {
 	// ShowLifecycle gates the expired/archived badge to capability surfaces.
 	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
 	ShowLifecycle bool
+	// HealthStates maps link ID → derived destination-health state for the
+	// "broken" badge. Admins hold capabilities on every row by construction.
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+	HealthStates map[string]string
 }
 
 // AdminLinkRowData wraps a single admin link with the display context the shared
@@ -73,9 +78,17 @@ type AdminLinkRowData struct {
 	Ctx  AdminLinksPage
 }
 
-// adminLinkRowData builds the wrapper for a single admin link row swap.
+// adminLinkRowData builds the wrapper for a single admin link row swap,
+// including the row's derived health state so a swapped-in row renders the
+// same "broken" badge as rows in the full list. A health lookup failure is
+// non-fatal for a row swap: the badge is simply omitted.
 // Governing: SPEC-0014 REQ "Abstract Link Widget"
-func adminLinkRowData(r *http.Request, link *store.AdminLink) AdminLinkRowData {
+// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+func (h *AdminHandler) adminLinkRowData(r *http.Request, link *store.AdminLink) AdminLinkRowData {
+	healthStates, err := buildHealthStates(r.Context(), h.links, []*store.Link{&link.Link}, nil, time.Now().UTC())
+	if err != nil {
+		healthStates = nil
+	}
 	return AdminLinkRowData{
 		Link: link,
 		Ctx: AdminLinksPage{
@@ -86,6 +99,7 @@ func adminLinkRowData(r *http.Request, link *store.AdminLink) AdminLinkRowData {
 			ShowVisibility: true,
 			ShowActions:    true,
 			ShowLifecycle:  true,
+			HealthStates:   healthStates,
 		},
 	}
 }
@@ -155,6 +169,19 @@ func (h *AdminHandler) Links(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	allLinks, _ := h.links.ListAllAdmin(r.Context(), q)
 
+	// Per-row derived health for the "broken" badge. Admins hold capabilities
+	// on every row by construction, so rowCaps gating is skipped (nil).
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+	rows := make([]*store.Link, len(allLinks))
+	for i, al := range allLinks {
+		rows[i] = &al.Link
+	}
+	healthStates, err := buildHealthStates(r.Context(), h.links, rows, nil, time.Now().UTC())
+	if err != nil {
+		http.Error(w, "could not load links", http.StatusInternalServerError)
+		return
+	}
+
 	data := AdminLinksPage{
 		BasePage:       newBasePage(r, user),
 		Links:          allLinks,
@@ -165,6 +192,7 @@ func (h *AdminHandler) Links(w http.ResponseWriter, r *http.Request) {
 		ShowVisibility: true,
 		ShowActions:    true,
 		ShowLifecycle:  true,
+		HealthStates:   healthStates,
 	}
 	if isHTMX(r) {
 		renderPageFragment(w, "admin/links.html", "admin_link_list", data)
@@ -182,7 +210,7 @@ func (h *AdminHandler) EditLinkRow(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	renderPageFragment(w, "admin/links.html", "admin_link_edit_row", adminLinkRowData(r, link))
+	renderPageFragment(w, "admin/links.html", "admin_link_edit_row", h.adminLinkRowData(r, link))
 }
 
 // UpdateLink handles PUT /admin/links/{id} — updates url, title, description, visibility and returns the read-only row.
@@ -246,7 +274,7 @@ func (h *AdminHandler) UpdateLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Governing: SPEC-0014 REQ "Abstract Link Widget" — reuse shared link_row markup
-	renderFragment(w, "link_row", adminLinkRowData(r, link))
+	renderFragment(w, "link_row", h.adminLinkRowData(r, link))
 }
 
 // renderEditRowError re-renders the inline edit row with the submitted values
@@ -264,7 +292,7 @@ func (h *AdminHandler) renderEditRowError(w http.ResponseWriter, r *http.Request
 	link.URL = url
 	link.Title = title
 	link.Description = description
-	renderPageFragment(w, "admin/links.html", "admin_link_edit_row", adminLinkRowData(r, link))
+	renderPageFragment(w, "admin/links.html", "admin_link_edit_row", h.adminLinkRowData(r, link))
 	_, _ = fmt.Fprintf(w,
 		`<div id="toast-area" hx-swap-oob="innerHTML:#toast-area"><div class="alert alert-error"><span>%s</span></div></div>`,
 		template.HTMLEscapeString(msg))
@@ -294,7 +322,7 @@ func (h *AdminHandler) LinkRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Governing: SPEC-0014 REQ "Abstract Link Widget" — reuse shared link_row markup
-	renderFragment(w, "link_row", adminLinkRowData(r, link))
+	renderFragment(w, "link_row", h.adminLinkRowData(r, link))
 }
 
 // ConfirmDeleteLink renders the delete confirmation modal for a link.

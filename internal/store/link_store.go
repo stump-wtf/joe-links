@@ -20,11 +20,16 @@ type Link struct {
 	URL         string     `db:"url"`
 	Title       string     `db:"title"`
 	Description string     `db:"description"`
-	Visibility  string     `db:"visibility"` // Governing: SPEC-0010 REQ "Visibility Column on Links Table"
+	Visibility  string     `db:"visibility"`  // Governing: SPEC-0010 REQ "Visibility Column on Links Table"
 	ExpiresAt   *time.Time `db:"expires_at"`  // Governing: SPEC-0020 REQ "Link Expiration" — NULL means never expires
 	ArchivedAt  *time.Time `db:"archived_at"` // Governing: SPEC-0020 REQ "Archive State" — NULL means not archived
-	CreatedAt   time.Time  `db:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at"`
+	// HealthChecksDisabled is the per-link health-check opt-out, editable with
+	// CanEdit via the link form and API. While set, the checker never probes
+	// the destination and any frozen link_health row stops being surfaced.
+	// Governing: SPEC-0020 REQ "Destination Health Checking" — Eligibility
+	HealthChecksDisabled bool      `db:"health_checks_disabled"`
+	CreatedAt            time.Time `db:"created_at"`
+	UpdatedAt            time.Time `db:"updated_at"`
 }
 
 // Derived lifecycle states. Lifecycle state is computed from the two nullable
@@ -37,10 +42,10 @@ const (
 )
 
 // HealthUnchecked is the derived destination-health state for a link with no
-// recorded checks. The full health-state machine (ok/broken/skipped, the
-// link_health table, and the checker goroutine) lands with the
-// destination-health story (#274); until then every link surfaces as
-// unchecked — absence of a health row means "never checked".
+// recorded checks — absence of a link_health row means "never checked". It is
+// also what the surfacing rule reports for opted-out, archived, and expired
+// links, whose frozen health rows are not surfaced. The remaining states
+// (ok/broken/skipped) and the derivation live in health.go.
 // Governing: SPEC-0020 REQ "Destination Health Checking", REQ "Lifecycle State in API and MCP"
 const HealthUnchecked = "unchecked"
 
@@ -778,10 +783,17 @@ func (s *LinkStore) ListVisibleByTag(ctx context.Context, tagSlug, userID string
 // Governing: SPEC-0012 REQ "Public Link Browser (GET /links)", REQ "Public Link Search"
 // ListPublic returns paginated public links as AdminLink rows, optionally filtered by query.
 // currentUserID is used to set IsOwner; pass "" for unauthenticated callers.
+// Expired and archived links are excluded for ALL callers — public browsing
+// must not let lifecycle states be enumerated (the SPEC-0020 carve-out from
+// SPEC-0012's "display all public links"), and the exclusion lives here in
+// the store so every consumer (web browser, MCP list_links filter=public)
+// gets it for free.
 // Governing: SPEC-0012 REQ "Public Link Browser (GET /links)", REQ "Public Link Search"
+// Governing: SPEC-0020 REQ "Health Badges and Admin Report" scenario "Public
+// Browser Shows No Health Data", Security "Resolution Ordering and Oracle Resistance"
 func (s *LinkStore) ListPublic(ctx context.Context, currentUserID, q string, page, perPage int) ([]*AdminLink, int, error) {
-	baseWhere := `WHERE l.visibility = 'public'`
-	var args []interface{}
+	baseWhere := `WHERE l.visibility = 'public' AND ` + linkActiveWhere
+	args := []interface{}{time.Now().UTC()}
 	if q != "" {
 		// LIKE metacharacters escaped — see SearchByOwner (issue #265).
 		pattern := "%" + escapeLike(q) + "%"
@@ -882,16 +894,21 @@ func (s *LinkStore) RemoveShare(ctx context.Context, linkID, userID string) erro
 // render them identically to the public link browser. Paginated.
 // currentUserID is used to set IsOwner; pass "" for unauthenticated callers.
 // Returns the links, total count, and any error.
+// Expired and archived links are excluded for ALL callers, matching
+// ListPublic — profile pages are a public surface and must not disclose
+// lifecycle states (the SPEC-0020 carve-out from SPEC-0012).
 // Governing: SPEC-0012 REQ "User Profile Page (GET /u/{display_name_slug})"
 // Governing: SPEC-0014 REQ "Abstract Link Widget" — same shape as ListPublic
+// Governing: SPEC-0020 REQ "Health Badges and Admin Report", Security "Resolution Ordering and Oracle Resistance"
 func (s *LinkStore) ListPublicByOwner(ctx context.Context, userID, currentUserID string, page, perPage int) ([]*AdminLink, int, error) {
+	now := time.Now().UTC()
 	// Count total matching links
 	var total int
 	err := s.db.GetContext(ctx, &total, s.q(`
 		SELECT COUNT(DISTINCT l.id) FROM links l
 		JOIN link_owners lo ON lo.link_id = l.id AND lo.is_primary = 1
-		WHERE l.visibility = 'public' AND lo.user_id = ?
-	`), userID)
+		WHERE l.visibility = 'public' AND `+linkActiveWhere+` AND lo.user_id = ?
+	`), now, userID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -912,11 +929,12 @@ func (s *LinkStore) ListPublicByOwner(ctx context.Context, userID, currentUserID
 		LEFT JOIN link_tags lt ON lt.link_id = l.id
 		LEFT JOIN tags t ON t.id = lt.tag_id
 		WHERE l.visibility = 'public'
+		  AND `+linkActiveWhere+`
 		  AND lo.user_id = ?
 		GROUP BY l.id
 		ORDER BY l.created_at DESC
 		LIMIT ? OFFSET ?
-	`, s.aggDistinct("t.name"))), currentUserID, userID, perPage, offset)
+	`, s.aggDistinct("t.name"))), currentUserID, now, userID, perPage, offset)
 	if err != nil {
 		return nil, 0, err
 	}

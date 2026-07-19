@@ -95,6 +95,16 @@
                     hx-target="#link-{{$l.ID}}"
                     hx-swap="outerHTML">Renew</button>
             {{- end}}{{- end}}
+            {{- /* Destination-health badge, rendered only in the active
+                 branch: a broken badge never renders on an archived or
+                 expired link (its frozen health row is not surfaced —
+                 SPEC-0020 surfacing rule; DeriveHealth enforces the same in
+                 the store). HealthStates is populated only for rows the
+                 viewer holds capabilities on, so public surfaces and
+                 non-capable rows render no health information.
+                 Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+                 scenario "Broken Badge on Owner Dashboard" */ -}}
+            {{- else if eq (index $ctx.HealthStates $l.ID) "broken"}}<span class="badge badge-sm badge-error tooltip tooltip-right" data-tip="Destination health checks are failing">broken</span>
             {{- end}}
             {{- end}}
         </div>

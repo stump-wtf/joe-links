@@ -1,0 +1,70 @@
+{{template "base" .}}
+
+{{define "title"}}Link Health — Admin — Joe Links{{end}}
+
+{{define "content"}}
+<!-- Governing: SPEC-0020 REQ "Health Badges and Admin Report" scenario "Admin
+     Report Lists Failing Links" — all currently broken links (3+ consecutive
+     failed checks, still eligible for checking), most failures first. Healthy,
+     opted-out, skipped, and never-checked links are excluded in the store
+     query. Destination URLs and checker error strings are attacker-influenced
+     (a malicious destination controls response data) and render through
+     html/template's escaping ("Security Requirements" — Output Escaping). -->
+<div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold">Link Health</h1>
+    <div class="flex items-center gap-3">
+        <span class="text-base-content/60 text-sm">{{len .Rows}} broken</span>
+        <a href="/admin" class="btn btn-ghost btn-sm">&larr; Admin</a>
+    </div>
+</div>
+
+{{if .Rows}}
+<div class="overflow-x-auto">
+    <table class="table table-zebra w-full">
+        <thead>
+            <tr>
+                <th>Slug</th>
+                <th>Destination</th>
+                <th>Owner(s)</th>
+                <th>Last status</th>
+                <th>Last checked</th>
+                <th>Failures</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Rows}}
+            <tr>
+                <td class="whitespace-nowrap">
+                    <!-- Each row links to the link's detail page. -->
+                    <a href="/dashboard/links/{{.ID}}" class="font-mono font-semibold link link-primary">{{.Slug}}</a>
+                    <span class="badge badge-sm badge-error ml-1">broken</span>
+                </td>
+                <td class="max-w-xs truncate text-sm text-base-content/70">
+                    <a href="{{.URL}}" class="link link-hover" target="_blank" rel="noopener noreferrer">{{.URL}}</a>
+                </td>
+                <td class="text-sm text-base-content/70">{{.Owners}}</td>
+                <td class="text-sm">
+                    {{if .LastStatus}}<span class="font-mono">{{.LastStatus}}</span>
+                    {{else if .LastError}}<span class="text-error text-xs break-all">{{.LastError}}</span>
+                    {{else}}<span class="text-base-content/50">—</span>{{end}}
+                </td>
+                <td class="text-sm text-base-content/60 whitespace-nowrap">
+                    {{if .LastCheckedAt}}{{.LastCheckedAt.UTC.Format "Jan 2, 2006 3:04 PM"}} UTC{{else}}—{{end}}
+                </td>
+                <td class="text-sm font-semibold">{{.ConsecutiveFailures}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="hero py-16">
+    <div class="hero-content text-center">
+        <div>
+            <h2 class="text-xl font-semibold mb-2">No broken links</h2>
+            <p class="text-base-content/60 mb-4">Every checked destination is currently answering.</p>
+        </div>
+    </div>
+</div>
+{{end}}
+{{end}}

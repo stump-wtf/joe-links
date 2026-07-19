@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/joestump/joe-links/internal/auth"
@@ -141,6 +142,19 @@ func (h *LinksHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Derived destination health for the detail surface: every viewer here
+	// holds CanView (gate above), so health information may render. The store
+	// derivation applies the surfacing rule — archived, expired, and
+	// opted-out links report unchecked with null details.
+	// Governing: SPEC-0020 REQ "Health Badges and Admin Report"
+	hRow, err := h.links.GetHealth(r.Context(), link.ID)
+	if err != nil {
+		log.Printf("load health for link %s: %v", link.ID, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	health := store.DeriveHealth(link, hRow, time.Now().UTC())
+
 	data := LinkDetailPage{
 		BasePage:  newBasePage(r, user),
 		User:      user,
@@ -151,6 +165,7 @@ func (h *LinksHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		CanEdit:   caps.CanEdit,
 		CanDelete: caps.CanDelete,
 		CanManage: caps.CanManageShares,
+		Health:    health,
 	}
 	if isHTMX(r) {
 		renderPageFragment(w, "links/detail.html", "content", data)

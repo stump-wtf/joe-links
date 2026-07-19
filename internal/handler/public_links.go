@@ -33,7 +33,9 @@ type PublicLinksPage struct {
 	ShowActions    bool
 	// ShowLifecycle stays false: the public browser must not disclose
 	// expired/archived state to anonymous visitors — SPEC-0020 excludes those
-	// links from this surface entirely (exclusion lands with #274).
+	// links from this surface entirely (the lifecycle predicate lives in
+	// LinkStore.ListPublic), and health information never renders here either
+	// (no HealthStates field: this is not a capability surface).
 	// Governing: SPEC-0020 REQ "Health Badges and Admin Report", Security "Resolution Ordering and Oracle Resistance"
 	ShowLifecycle bool
 }

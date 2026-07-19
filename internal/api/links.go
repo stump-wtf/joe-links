@@ -281,6 +281,18 @@ func (h *linksAPIHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional health-check opt-out on create: the creator is the primary
+	// owner, so the CanEdit authorization is held by construction.
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — POST accepts
+	// health_checks_disabled; REQ "Destination Health Checking" — Eligibility
+	if req.HealthChecksDisabled != nil && *req.HealthChecksDisabled {
+		link, err = h.links.SetHealthChecksDisabled(r.Context(), link.ID, true)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
+			return
+		}
+	}
+
 	// The creator is the primary owner, so the health object is included.
 	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
 	lr, err := h.toLinkResponse(r.Context(), link, true)
@@ -351,14 +363,15 @@ func (h *linksAPIHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, lr)
 }
 
-// Update modifies a link's url, title, description, tags, expiration, and
-// archive state. Slug is immutable and ignored.
+// Update modifies a link's url, title, description, tags, expiration,
+// archive state, and health-check opt-out. Slug is immutable and ignored.
 // PUT /api/v1/links/{id}
 // Governing: SPEC-0005 REQ "Link Resource" — slug field MUST be ignored (immutable)
 // Governing: SPEC-0020 REQ "Archive State" — accepts a boolean archived field
+// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — accepts health_checks_disabled
 //
 // @Summary      Update a link
-// @Description  Updates url, title, description, tags, visibility, expiration, and archive state. Slug is immutable and ignored. A body containing only "archived" toggles the archive state without altering any other field; combining "archived" with other fields is a full update and requires url.
+// @Description  Updates url, title, description, tags, visibility, expiration, archive state, and the health-check opt-out. Slug is immutable and ignored. A body containing only toggle fields ("archived" and/or "health_checks_disabled") applies those toggles without altering any other field; combining them with other fields is a full update and requires url.
 // @Tags         Links
 // @Accept       json
 // @Produce      json
@@ -400,26 +413,41 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Archive-only toggle: a body whose ONLY populated field is archived
-	// (e.g. {"archived": true}) changes just the archive state. Routing it
-	// through the full-resource update would overwrite title, description,
-	// and tags with the zero values the caller never sent. The carve-out is
-	// deliberately this narrow: any sibling field without url falls through
-	// to the "url is required" 400 below instead of being silently discarded,
-	// so {"archived": true, "expires_at": <past>} is rejected just as MCP
-	// update_link rejects it — the two surfaces cannot diverge by one of them
-	// ignoring fields the other validates.
+	// Toggle-only carve-out: a body whose ONLY populated fields are the
+	// boolean toggles — archived and/or health_checks_disabled — changes just
+	// those states (e.g. {"archived": true} or {"health_checks_disabled":
+	// true}). Routing such a body through the full-resource update would
+	// overwrite title, description, and tags with the zero values the caller
+	// never sent. The carve-out is deliberately this narrow: any other
+	// sibling field without url falls through to the "url is required" 400
+	// below instead of being silently discarded, so {"archived": true,
+	// "expires_at": <past>} is rejected just as MCP update_link rejects it —
+	// the two surfaces cannot diverge by one of them ignoring fields the
+	// other validates.
 	// Governing: SPEC-0020 REQ "Archive State" scenarios "API Archive
 	// Round-Trip", "Non-Editor Cannot Archive"
-	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — REST/MCP parity
-	archiveOnly := req.Archived != nil && req.URL == "" && req.Title == "" &&
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — PUT accepts
+	// archived and health_checks_disabled under CanEdit; REST/MCP parity
+	togglesOnly := (req.Archived != nil || req.HealthChecksDisabled != nil) &&
+		req.URL == "" && req.Title == "" &&
 		req.Description == "" && req.Visibility == "" && !req.ExpiresAt.Set &&
 		req.Tags == nil
-	if archiveOnly {
-		updated, err := h.links.SetArchived(r.Context(), link.ID, *req.Archived)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
-			return
+	if togglesOnly {
+		updated := link
+		var err error
+		if req.Archived != nil {
+			updated, err = h.links.SetArchived(r.Context(), link.ID, *req.Archived)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
+				return
+			}
+		}
+		if req.HealthChecksDisabled != nil {
+			updated, err = h.links.SetHealthChecksDisabled(r.Context(), link.ID, *req.HealthChecksDisabled)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
+				return
+			}
 		}
 		lr, err := h.toLinkResponse(r.Context(), updated, true)
 		if err != nil {
@@ -511,6 +539,18 @@ func (h *linksAPIHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// Governing: SPEC-0020 REQ "Archive State"
 	if req.Archived != nil {
 		updated, err = h.links.SetArchived(r.Context(), link.ID, *req.Archived)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
+			return
+		}
+	}
+
+	// Health-check opt-out alongside a full update, same CanEdit gate;
+	// omitted leaves the stored flag unchanged.
+	// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP" — PUT accepts
+	// health_checks_disabled; REQ "Destination Health Checking" — Eligibility
+	if req.HealthChecksDisabled != nil {
+		updated, err = h.links.SetHealthChecksDisabled(r.Context(), link.ID, *req.HealthChecksDisabled)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 			return
@@ -788,21 +828,12 @@ func (h *linksAPIHandler) toLinkResponse(ctx context.Context, link *store.Link, 
 	return buildLinkResponse(ctx, h.links, h.ownership, link, includeHealth)
 }
 
-// uncheckedHealth returns the health object for a link with no recorded
-// checks. The real derivation from the link_health table lands with the
-// destination-health story (#274); until then absence of a row means
-// "unchecked" for every link, with null details.
-// Governing: SPEC-0020 REQ "Lifecycle State in API and MCP", REQ "Destination Health Checking"
-func uncheckedHealth() *HealthResponse {
-	return &HealthResponse{Status: store.HealthUnchecked}
-}
-
 // buildLinkResponse converts a store.Link to an API LinkResponse, populating
 // owners, tags, visibility, and the derived lifecycle state. Shared by every
 // endpoint that returns links so the JSON shape stays consistent.
 // includeHealth must be true only for callers holding capabilities on the
 // link (owners, co-owners, admins, share recipients) — callers without
-// capabilities never receive the health object.
+// capabilities never receive the health object or the opt-out flag.
 // Governing: SPEC-0005 REQ "API Response Structures"
 // Governing: SPEC-0020 REQ "Lifecycle State in API and MCP"
 func buildLinkResponse(ctx context.Context, links *store.LinkStore, ownership *store.OwnershipStore, link *store.Link, includeHealth bool) (*LinkResponse, error) {
@@ -848,7 +879,23 @@ func buildLinkResponse(ctx context.Context, links *store.LinkStore, ownership *s
 		UpdatedAt:      link.UpdatedAt,
 	}
 	if includeHealth {
-		resp.Health = uncheckedHealth()
+		// Derived in the shared store layer, subject to the surfacing rule:
+		// for opted-out, archived, or expired links the status is "unchecked"
+		// with null details even when a frozen link_health row exists.
+		// Governing: SPEC-0020 REQ "Destination Health Checking" — surfacing
+		// rule; REQ "Lifecycle State in API and MCP"
+		hRow, err := links.GetHealth(ctx, link.ID)
+		if err != nil {
+			return nil, err
+		}
+		view := store.DeriveHealth(link, hRow, time.Now().UTC())
+		resp.Health = &HealthResponse{
+			Status:        view.Status,
+			LastCheckedAt: view.LastCheckedAt,
+			LastStatus:    view.LastStatus,
+		}
+		disabled := link.HealthChecksDisabled
+		resp.HealthChecksDisabled = &disabled
 	}
 	return resp, nil
 }
