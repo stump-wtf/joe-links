@@ -10,6 +10,54 @@ definitions:
       email:
         type: string
     type: object
+  internal_api.AnalyticsNeverClicked:
+    properties:
+      created_at:
+        type: string
+      link_id:
+        type: string
+      slug:
+        type: string
+    type: object
+  internal_api.AnalyticsReferrer:
+    properties:
+      count:
+        type: integer
+      host:
+        type: string
+    type: object
+  internal_api.AnalyticsResponse:
+    properties:
+      never_clicked:
+        items:
+          $ref: '#/definitions/internal_api.AnalyticsNeverClicked'
+        type: array
+      period:
+        type: string
+      scope:
+        type: string
+      top_links:
+        items:
+          $ref: '#/definitions/internal_api.AnalyticsTopLink'
+        type: array
+      top_referrers:
+        items:
+          $ref: '#/definitions/internal_api.AnalyticsReferrer'
+        type: array
+    type: object
+  internal_api.AnalyticsTopLink:
+    properties:
+      count:
+        type: integer
+      link_id:
+        type: string
+      previous_count:
+        type: integer
+      slug:
+        type: string
+      trend_pct:
+        type: number
+    type: object
   internal_api.BreakdownAuthSplit:
     properties:
       anonymous:
@@ -480,6 +528,55 @@ paths:
       summary: Update user role (admin)
       tags:
       - Admin
+  /analytics:
+    get:
+      consumes:
+      - application/json
+      description: 'Aggregate analytics over the caller''s personal scope — links
+        they own or co-own plus links shared with them: the top 10 most-clicked links
+        for the period with a trend vs the previous equal-length period (trend_pct
+        is null when the previous period had zero clicks), links created at least
+        7 days ago with no recorded clicks (newest first, capped at 10), and the top
+        referrer hosts. Counts only — no clicker identities. Admins may pass scope=all
+        for instance-wide aggregates; scope=all from a non-admin is 403.'
+      parameters:
+      - description: 'Aggregation period: week (default, last 7 days) or month (last
+          30 days)'
+        in: query
+        name: period
+        type: string
+      - description: 'Aggregation scope: mine (default) or all (admin only)'
+        in: query
+        name: scope
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.AnalyticsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      security:
+      - BearerToken: []
+      summary: Get global analytics
+      tags:
+      - Analytics
   /config:
     get:
       description: Returns extension-facing configuration such as the short-link prefix

@@ -22,6 +22,10 @@ type Deps struct {
 	ClickStore       *store.ClickStore
 	Suggester        llm.Suggester // nil when LLM is not configured
 	ShortKeyword     string        // optional override (JOE_SHORT_KEYWORD); "" = derive from request Host
+	// RetentionDays is the click-retention horizon (JOE_CLICK_RETENTION); 0 =
+	// retention disabled (the default).
+	// Governing: SPEC-0021 REQ "Click Retention"
+	RetentionDays int
 }
 
 // NewAPIRouter creates and returns a chi router for /api/v1.
@@ -84,12 +88,18 @@ func NewAPIRouter(deps Deps) http.Handler {
 		// breakdowns + CSV export).
 		// Governing: SPEC-0016 REQ "REST API Stats Endpoint", REQ "REST API Clicks Endpoint", ADR-0016
 		// Governing: SPEC-0021 REQ "Time Series API", REQ "Click Breakdowns", REQ "CSV Export", ADR-0021
-		statsH := newStatsAPIHandler(deps.LinkStore, deps.ClickStore, deps.OwnershipStore)
+		statsH := newStatsAPIHandler(deps.LinkStore, deps.ClickStore, deps.OwnershipStore, deps.RetentionDays)
 		r.Get("/links/{id}/stats", statsH.GetStats)
 		r.Get("/links/{id}/clicks", statsH.ListClicks)
 		r.Get("/links/{id}/stats/timeseries", statsH.GetTimeSeries)
 		r.Get("/links/{id}/stats/breakdowns", statsH.GetBreakdowns)
 		r.Get("/links/{id}/stats/export", statsH.ExportClicks)
+
+		// Global analytics: aggregates over the caller's personal scope
+		// (own + co-owned + shared), scope=all admin-only.
+		// Governing: SPEC-0021 REQ "Global Analytics Dashboard", ADR-0021
+		analyticsH := newAnalyticsAPIHandler(deps.ClickStore)
+		r.Get("/analytics", analyticsH.GetAnalytics)
 
 		// Admin-only routes behind role-check middleware group.
 		// Governing: SPEC-0005 REQ "Admin Endpoints", ADR-0008

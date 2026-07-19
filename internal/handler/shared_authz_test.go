@@ -70,7 +70,7 @@ func newSharedAuthzEnv(t *testing.T) *sharedAuthzEnv {
 
 	dashboard := NewDashboardHandler(ls, owns, tagStore, ks)
 	links := NewLinksHandler(ls, owns, us, ks)
-	statsHandler := NewStatsHandler(ls, cs, owns)
+	statsHandler := NewStatsHandler(ls, cs, owns, 0)
 
 	r := chi.NewRouter()
 	r.Get("/dashboard", dashboard.Show)

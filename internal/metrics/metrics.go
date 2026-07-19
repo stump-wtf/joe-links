@@ -43,4 +43,12 @@ var (
 		Name: "joelinks_mcp_tool_calls_total",
 		Help: "MCP tool invocations by tool name and outcome.",
 	}, []string{"tool", "outcome"})
+
+	// ClicksPrunedTotal counts click rows deleted by the retention pruner. No
+	// slug label — the SPEC-0016 cardinality rule applies.
+	// Governing: SPEC-0021 REQ "Click Retention", ADR-0021
+	ClicksPrunedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "joelinks_clicks_pruned_total",
+		Help: "Click rows deleted by the retention pruner.",
+	})
 )

@@ -8,6 +8,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -93,5 +94,92 @@ func TestHealthConfig_InvalidDurationsRejected(t *testing.T) {
 	t.Setenv("JOE_HEALTH_CHECK_INTERVAL", "often")
 	if _, err := Load(); err == nil {
 		t.Error("Load accepted an unparseable JOE_HEALTH_CHECK_INTERVAL")
+	}
+}
+
+// Click-retention configuration (JOE_CLICK_RETENTION): off by default,
+// integer days when set, with negative / non-integer / below-90-day values
+// failing startup — the ≥90-day floor protects SPEC-0020's staleness views,
+// which compute a 90-day window directly from link_clicks.
+// Governing: SPEC-0021 REQ "Click Retention", ADR-0021 (e)
+
+func TestClickRetentionConfig_DefaultOff(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ClickRetentionDays != 0 {
+		t.Errorf("JOE_CLICK_RETENTION default = %d, want 0 (retention off — no deletion)", cfg.ClickRetentionDays)
+	}
+}
+
+func TestClickRetentionConfig_OptIn(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("JOE_CLICK_RETENTION", "365")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ClickRetentionDays != 365 {
+		t.Errorf("ClickRetentionDays = %d, want 365", cfg.ClickRetentionDays)
+	}
+}
+
+func TestClickRetentionConfig_ExplicitZeroDisables(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("JOE_CLICK_RETENTION", "0")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ClickRetentionDays != 0 {
+		t.Errorf("ClickRetentionDays = %d, want 0 (explicit 0 disables retention)", cfg.ClickRetentionDays)
+	}
+}
+
+func TestClickRetentionConfig_NegativeFailsStartup(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("JOE_CLICK_RETENTION", "-30")
+	if _, err := Load(); err == nil {
+		t.Error("Load accepted a negative JOE_CLICK_RETENTION")
+	}
+}
+
+func TestClickRetentionConfig_NonIntegerFailsStartup(t *testing.T) {
+	setRequiredEnv(t)
+	for _, v := range []string{"90d", "1.5", "forever"} {
+		t.Setenv("JOE_CLICK_RETENTION", v)
+		if _, err := Load(); err == nil {
+			t.Errorf("Load accepted non-integer JOE_CLICK_RETENTION %q", v)
+		}
+	}
+}
+
+// Values 1–89 fail startup naming the staleness constraint: SPEC-0020's
+// staleness views compute a 90-day window directly from link_clicks, and
+// retention must not undercut it.
+func TestClickRetentionConfig_BelowStalenessFloorFailsStartup(t *testing.T) {
+	setRequiredEnv(t)
+	for _, v := range []string{"1", "89"} {
+		t.Setenv("JOE_CLICK_RETENTION", v)
+		_, err := Load()
+		if err == nil {
+			t.Errorf("Load accepted JOE_CLICK_RETENTION=%s below the 90-day staleness floor", v)
+			continue
+		}
+		if !strings.Contains(err.Error(), "90") || !strings.Contains(err.Error(), "staleness") {
+			t.Errorf("floor error must name the 90-day staleness constraint; got %q", err)
+		}
+	}
+
+	// The floor itself is allowed.
+	t.Setenv("JOE_CLICK_RETENTION", "90")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load rejected JOE_CLICK_RETENTION=90: %v", err)
+	}
+	if cfg.ClickRetentionDays != 90 {
+		t.Errorf("ClickRetentionDays = %d, want 90", cfg.ClickRetentionDays)
 	}
 }

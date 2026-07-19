@@ -57,7 +57,7 @@ func newForbiddenTestEnv(t *testing.T) *forbiddenTestEnv {
 	}
 
 	links := NewLinksHandler(ls, owns, us, ks)
-	statsHandler := NewStatsHandler(ls, cs, owns)
+	statsHandler := NewStatsHandler(ls, cs, owns, 0)
 	keywordsHandler := NewKeywordsHandler(ks)
 
 	// Mirror NewRouter: inject the styled forbidden renderer into the auth

@@ -41,6 +41,10 @@ type Deps struct {
 	ClickCh        chan<- store.ClickEvent // Governing: SPEC-0016 REQ "Click Recording", ADR-0016
 	Suggester      llm.Suggester           // Governing: SPEC-0017 REQ "Suggest API Endpoint", ADR-0017; nil when LLM is not configured
 	ShortKeyword   string                  // optional override (e.g. "go"); defaults to first label of HTTP host
+	// RetentionDays is the click-retention horizon (JOE_CLICK_RETENTION); 0 =
+	// retention disabled (the default).
+	// Governing: SPEC-0021 REQ "Click Retention", ADR-0021
+	RetentionDays int
 }
 
 // NewRouter assembles the full chi router with all middleware and routes.
@@ -102,12 +106,21 @@ func NewRouter(deps Deps) http.Handler {
 	tags := NewTagsHandler(deps.TagStore, deps.LinkStore, deps.OwnershipStore, deps.KeywordStore)
 	tokensWeb := NewTokensHandler(deps.TokenStore)
 	// Governing: SPEC-0016 REQ "Link Stats Dashboard Page", ADR-0016
-	statsHandler := NewStatsHandler(deps.LinkStore, deps.ClickStore, deps.OwnershipStore)
+	// Governing: SPEC-0021 REQ "Click Retention" — the retention horizon is
+	// threaded through so pruned chart days and labeled totals render honestly
+	statsHandler := NewStatsHandler(deps.LinkStore, deps.ClickStore, deps.OwnershipStore, deps.RetentionDays)
+	// Governing: SPEC-0021 REQ "Global Analytics Dashboard", ADR-0021
+	analyticsHandler := NewAnalyticsHandler(deps.ClickStore, deps.RetentionDays)
 
 	r.Group(func(r chi.Router) {
 		r.Use(deps.AuthMiddleware.RequireAuth)
 
 		r.Get("/dashboard", dashboard.Show)
+
+		// Global analytics dashboard: personal scope (own + co-owned +
+		// shared) by default for every viewer; scope=all is admin-only.
+		// Governing: SPEC-0021 REQ "Global Analytics Dashboard", REQ "Capability Gating of Analytics Surfaces", ADR-0021
+		r.Get("/dashboard/analytics", analyticsHandler.Show)
 
 		// NOTE: validate-slug MUST be before /{id} to avoid chi treating "validate-slug" as an id
 		r.Get("/dashboard/links/validate-slug", links.ValidateSlug)
@@ -205,6 +218,7 @@ func NewRouter(deps Deps) http.Handler {
 		ClickStore:       deps.ClickStore,
 		Suggester:        deps.Suggester,
 		ShortKeyword:     deps.ShortKeyword,
+		RetentionDays:    deps.RetentionDays,
 	})
 	r.Mount("/api/v1", apiRouter)
 

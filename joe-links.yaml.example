@@ -34,6 +34,12 @@ session:
 # Defaults to the first DNS label of the request host.
 # short_keyword: go
 
+# Click retention horizon in days (JOE_CLICK_RETENTION). Unset/0 = retention
+# off (the default): click history is kept forever. Minimum 90 when set.
+# WARNING: pruned click rows are unrecoverable. Enable on at most one
+# instance in multi-replica deployments.
+# click_retention: 365
+
 # --- LLM slug suggestions (optional — omit provider to disable) ---
 # llm:
 #   provider: anthropic        # "anthropic", "openai", or "openai-compatible"

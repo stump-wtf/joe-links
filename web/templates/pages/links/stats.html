@@ -15,9 +15,18 @@
     <!-- Stat cards -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div class="stat bg-base-200 rounded-box shadow">
+            {{/* Governing: SPEC-0021 REQ "Click Retention" — scenario "Labeled
+                 totals under retention": with retention active the total covers
+                 the retention window, not all time, and the card says so. */}}
+            {{if .RetentionDays}}
+            <div class="stat-title">Since {{.RetentionSince}}</div>
+            <div class="stat-value">{{.Stats.Total}}</div>
+            <div class="stat-desc">clicks within the {{.RetentionDays}}-day retention window</div>
+            {{else}}
             <div class="stat-title">All Time</div>
             <div class="stat-value">{{.Stats.Total}}</div>
             <div class="stat-desc">total clicks</div>
+            {{end}}
         </div>
         <div class="stat bg-base-200 rounded-box shadow">
             <div class="stat-title">Last 7 Days</div>

@@ -204,6 +204,72 @@
                 }
             }
         },
+        "/analytics": {
+            "get": {
+                "security": [
+                    {
+                        "BearerToken": []
+                    }
+                ],
+                "description": "Aggregate analytics over the caller's personal scope — links they own or co-own plus links shared with them: the top 10 most-clicked links for the period with a trend vs the previous equal-length period (trend_pct is null when the previous period had zero clicks), links created at least 7 days ago with no recorded clicks (newest first, capped at 10), and the top referrer hosts. Counts only — no clicker identities. Admins may pass scope=all for instance-wide aggregates; scope=all from a non-admin is 403.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Analytics"
+                ],
+                "summary": "Get global analytics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Aggregation period: week (default, last 7 days) or month (last 30 days)",
+                        "name": "period",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Aggregation scope: mine (default) or all (admin only)",
+                        "name": "scope",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.AnalyticsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/config": {
             "get": {
                 "description": "Returns extension-facing configuration such as the short-link prefix (JOE_SHORT_KEYWORD override, else the first DNS label of the server hostname). No authentication required.",
@@ -1605,6 +1671,80 @@
             "properties": {
                 "email": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api.AnalyticsNeverClicked": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "link_id": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.AnalyticsReferrer": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "host": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.AnalyticsResponse": {
+            "type": "object",
+            "properties": {
+                "never_clicked": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.AnalyticsNeverClicked"
+                    }
+                },
+                "period": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "top_links": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.AnalyticsTopLink"
+                    }
+                },
+                "top_referrers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.AnalyticsReferrer"
+                    }
+                }
+            }
+        },
+        "internal_api.AnalyticsTopLink": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "link_id": {
+                    "type": "string"
+                },
+                "previous_count": {
+                    "type": "integer"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "trend_pct": {
+                    "type": "number"
                 }
             }
         },

@@ -17,10 +17,14 @@ type statsAPIHandler struct {
 	links  *store.LinkStore
 	clicks *store.ClickStore
 	owns   *store.OwnershipStore
+	// retention is the click-retention horizon in days (JOE_CLICK_RETENTION);
+	// 0 = retention disabled.
+	// Governing: SPEC-0021 REQ "Click Retention"
+	retention int
 }
 
-func newStatsAPIHandler(ls *store.LinkStore, cs *store.ClickStore, os *store.OwnershipStore) *statsAPIHandler {
-	return &statsAPIHandler{links: ls, clicks: cs, owns: os}
+func newStatsAPIHandler(ls *store.LinkStore, cs *store.ClickStore, os *store.OwnershipStore, retentionDays int) *statsAPIHandler {
+	return &statsAPIHandler{links: ls, clicks: cs, owns: os, retention: retentionDays}
 }
 
 // statsResponse is the JSON shape for GET /api/v1/links/{id}/stats.
@@ -280,12 +284,12 @@ func (h *statsAPIHandler) GetTimeSeries(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Retention (JOE_CLICK_RETENTION) is wired by the retention story; until
-	// then the API computes with retention disabled. Either way the pinned
-	// response shape carries no pruned marker — pruned days surface as
-	// zero-count entries in JSON and as no-data only on the web chart.
-	// Governing: SPEC-0021 REQ "Time Series API"
-	series, err := h.clicks.GetDailyClickSeries(r.Context(), link.ID, days, 0)
+	// Retention (JOE_CLICK_RETENTION) is threaded through so the series is
+	// computed against the real horizon; the pinned response shape carries no
+	// pruned marker, so pruned days surface as zero-count entries in JSON and
+	// as no-data only on the web chart.
+	// Governing: SPEC-0021 REQ "Time Series API", REQ "Click Retention"
+	series, err := h.clicks.GetDailyClickSeries(r.Context(), link.ID, days, h.retention)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", CodeInternalError)
 		return

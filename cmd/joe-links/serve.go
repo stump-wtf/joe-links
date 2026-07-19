@@ -1,6 +1,7 @@
 // Governing: SPEC-0001 REQ "CLI Entrypoint", "Go HTTP Server", ADR-0004
 // Governing: SPEC-0016 REQ "Click Recording", REQ "Prometheus Metrics Endpoint", ADR-0016
 // Governing: SPEC-0020 REQ "Destination Health Checking", ADR-0020
+// Governing: SPEC-0021 REQ "Click Retention", ADR-0021
 package main
 
 import (
@@ -21,6 +22,7 @@ import (
 	"github.com/joestump/joe-links/internal/health"
 	"github.com/joestump/joe-links/internal/llm"
 	"github.com/joestump/joe-links/internal/metrics"
+	"github.com/joestump/joe-links/internal/retention"
 	"github.com/joestump/joe-links/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -97,6 +99,25 @@ func newServeCmd() *cobra.Command {
 				checker.Run(ctx)
 			}()
 
+			// Click-retention pruner: an in-process goroutine on the same
+			// click-writer graceful-shutdown pattern as the health checker —
+			// started with the signal-aware context, its done channel awaited
+			// (bounded) after the server drains so an in-flight batched
+			// delete cannot race the deferred database.Close. Retention is
+			// off by default: with JOE_CLICK_RETENTION unset, Run returns
+			// immediately and no click row is ever deleted. Run itself emits
+			// the normative startup line when retention is active.
+			// Governing: SPEC-0021 REQ "Click Retention", ADR-0021 (e)
+			pruner := retention.New(clickStore, retention.Config{
+				Days:     cfg.ClickRetentionDays,
+				Interval: 24 * time.Hour,
+			})
+			prunerDone := make(chan struct{})
+			go func() {
+				defer close(prunerDone)
+				pruner.Run(ctx)
+			}()
+
 			// Governing: SPEC-0017 REQ "LLM Provider Configuration", ADR-0017
 			suggester, err := llm.New(cfg)
 			if err != nil {
@@ -123,6 +144,7 @@ func newServeCmd() *cobra.Command {
 				ClickCh:        clickCh,
 				Suggester:      suggester,
 				ShortKeyword:   cfg.ShortKeyword,
+				RetentionDays:  cfg.ClickRetentionDays,
 			})
 
 			srv := &http.Server{
@@ -146,6 +168,16 @@ func newServeCmd() *cobra.Command {
 			case <-checkerDone:
 			case <-time.After(30 * time.Second):
 				log.Printf("health checker: shutdown timed out after 30s")
+			}
+
+			// Await the retention pruner the same way: its batched deletes
+			// carry ctx (now cancelled), so this normally returns
+			// immediately; the timeout bounds a wedged in-flight delete.
+			// Governing: SPEC-0021 REQ "Click Retention", ADR-0021 (e)
+			select {
+			case <-prunerDone:
+			case <-time.After(30 * time.Second):
+				log.Printf("click retention: shutdown timed out after 30s")
 			}
 			return err
 		},

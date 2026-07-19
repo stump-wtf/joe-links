@@ -34,6 +34,13 @@ type StatsPage struct {
 	// tables below the chart, over the same window. Counts only.
 	// Governing: SPEC-0021 REQ "Click Breakdowns", ADR-0021
 	Breakdowns StatsBreakdownsData
+	// RetentionDays and RetentionSince label the totals honestly under
+	// retention: with retention active, SPEC-0016's "all-time" total becomes
+	// "total within the retention horizon", and the card says so.
+	// Governing: SPEC-0021 REQ "Click Retention" — scenario "Labeled totals
+	// under retention"
+	RetentionDays  int
+	RetentionSince string // horizon date, e.g. "Jul 19, 2025"; empty when retention is off
 }
 
 // StatsHandler serves the per-link analytics page.
@@ -41,11 +48,17 @@ type StatsHandler struct {
 	links  *store.LinkStore
 	clicks *store.ClickStore
 	owns   *store.OwnershipStore
+	// retention is the click-retention horizon in days (JOE_CLICK_RETENTION);
+	// 0 = retention disabled (the default). When set, the chart marks days
+	// older than the horizon as pruned and the totals are labeled as covering
+	// the retention window rather than "all time".
+	// Governing: SPEC-0021 REQ "Click Retention"
+	retention int
 }
 
 // NewStatsHandler creates a new StatsHandler.
-func NewStatsHandler(ls *store.LinkStore, cs *store.ClickStore, os *store.OwnershipStore) *StatsHandler {
-	return &StatsHandler{links: ls, clicks: cs, owns: os}
+func NewStatsHandler(ls *store.LinkStore, cs *store.ClickStore, os *store.OwnershipStore, retentionDays int) *StatsHandler {
+	return &StatsHandler{links: ls, clicks: cs, owns: os, retention: retentionDays}
 }
 
 // Show renders the stats page for a single link.
@@ -125,6 +138,13 @@ func (h *StatsHandler) Show(w http.ResponseWriter, r *http.Request) {
 		ShowClickers: caps.CanManageShares,
 		ChartData:    chart,
 		Breakdowns:   breakdowns,
+	}
+	// With retention active the totals cover the retention window, not all
+	// time — label them so.
+	// Governing: SPEC-0021 REQ "Click Retention" — scenario "Labeled totals under retention"
+	if h.retention > 0 {
+		data.RetentionDays = h.retention
+		data.RetentionSince = time.Now().UTC().AddDate(0, 0, -h.retention).Format("Jan 2, 2006")
 	}
 
 	if isHTMX(r) {
@@ -327,16 +347,14 @@ func (h *StatsHandler) Export(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// loadChart fetches the gap-filled daily series and builds the SVG view model.
-//
-// Retention (JOE_CLICK_RETENTION) is wired by the retention story (#278);
-// until then the web chart computes with retention disabled (retentionDays 0),
-// matching the API. The Pruned rendering path — no-data bands distinct from
-// zero-count days, lower-bound bars on the horizon-crossing bucket — is fully
-// implemented and template-tested, so #278 only threads configuration here.
-// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021
+// loadChart fetches the gap-filled daily series and builds the SVG view
+// model. The configured retention horizon (JOE_CLICK_RETENTION) is threaded
+// through so days older than the horizon render as no-data bands — visually
+// distinct from zero-count days — because a pruned day is not an unclicked
+// day.
+// Governing: SPEC-0021 REQ "Per-Link Daily Time Series", REQ "Click Retention", ADR-0021
 func (h *StatsHandler) loadChart(r *http.Request, linkID string, days int) (StatsChartData, error) {
-	series, err := h.clicks.GetDailyClickSeries(r.Context(), linkID, days, 0)
+	series, err := h.clicks.GetDailyClickSeries(r.Context(), linkID, days, h.retention)
 	if err != nil {
 		return StatsChartData{}, err
 	}

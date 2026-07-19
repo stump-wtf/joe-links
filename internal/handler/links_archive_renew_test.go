@@ -60,7 +60,7 @@ func newArchiveRenewEnv(t *testing.T) *archiveRenewEnv {
 	}
 
 	links := NewLinksHandler(ls, owns, us, ks)
-	statsHandler := NewStatsHandler(ls, cs, owns)
+	statsHandler := NewStatsHandler(ls, cs, owns, 0)
 	clickCh := make(chan store.ClickEvent, 8)
 	resolver := NewResolveHandler(ls, ks, owns, clickCh)
 

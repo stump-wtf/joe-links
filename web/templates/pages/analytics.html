@@ -1,0 +1,132 @@
+{{template "base" .}}
+{{define "title"}}Analytics — Joe Links{{end}}
+{{define "content"}}
+<!-- Governing: SPEC-0021 REQ "Global Analytics Dashboard", REQ "Capability Gating of Analytics Surfaces", ADR-0021 -->
+{{/* Aggregate counts only — no clicker names or identities anywhere on this
+     page. The default scope is the viewer's personal scope (own + co-owned +
+     shared); the instance-wide view exists only behind the admin-only
+     scope=all toggle. Period and scope toggles are HTMX fragment swaps of
+     this content block, matching the stats chart's window toggle pattern. */}}
+<div id="analytics-root" class="max-w-5xl mx-auto">
+    <div class="flex items-center gap-3 flex-wrap mb-6">
+        <h1 class="text-2xl font-bold">Analytics</h1>
+        <div class="ml-auto flex items-center gap-2 flex-wrap">
+            {{if .IsAdmin}}
+            {{/* Visible scope toggle, shown only to admins: everyone defaults
+                 to the personal scope; instance-wide is one explicit click.
+                 Governing: SPEC-0021 REQ "Global Analytics Dashboard" —
+                 scenario "Admin toggle" */}}
+            <div class="join" role="group" aria-label="Aggregation scope">
+                <button type="button"
+                        class="btn btn-xs join-item{{if eq .Scope "mine"}} btn-primary{{else}} btn-ghost{{end}}"
+                        hx-get="/dashboard/analytics?period={{.Period}}"
+                        hx-target="#analytics-root" hx-swap="outerHTML" hx-push-url="true">My links</button>
+                <button type="button"
+                        class="btn btn-xs join-item{{if eq .Scope "all"}} btn-primary{{else}} btn-ghost{{end}}"
+                        hx-get="/dashboard/analytics?period={{.Period}}&scope=all"
+                        hx-target="#analytics-root" hx-swap="outerHTML" hx-push-url="true">All links</button>
+            </div>
+            {{end}}
+            <div class="join" role="group" aria-label="Aggregation period">
+                <button type="button"
+                        class="btn btn-xs join-item{{if eq .Period "week"}} btn-primary{{else}} btn-ghost{{end}}"
+                        hx-get="/dashboard/analytics?period=week{{if eq .Scope "all"}}&scope=all{{end}}"
+                        hx-target="#analytics-root" hx-swap="outerHTML" hx-push-url="true">Week</button>
+                <button type="button"
+                        class="btn btn-xs join-item{{if eq .Period "month"}} btn-primary{{else}} btn-ghost{{end}}"
+                        hx-get="/dashboard/analytics?period=month{{if eq .Scope "all"}}&scope=all{{end}}"
+                        hx-target="#analytics-root" hx-swap="outerHTML" hx-push-url="true">Month</button>
+            </div>
+        </div>
+    </div>
+    <p class="text-xs text-base-content/50 mb-6">
+        {{if eq .Scope "all"}}All links on this instance{{else}}Links you own, co-own, or that are shared with you{{end}}
+        &middot; last {{.PeriodDays}} days vs the {{.PeriodDays}} days before
+    </p>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+        <!-- Top links: most-clicked in the period, trend vs previous equal-length period -->
+        <div class="card bg-base-200 shadow">
+            <div class="card-body">
+                <h2 class="card-title text-base">Top Links</h2>
+                <p class="text-xs text-base-content/50">most clicked, last {{.PeriodDays}} days</p>
+                {{if .TopLinks}}
+                <table class="table table-sm">
+                    <thead>
+                        <tr><th>Link</th><th class="text-right">Clicks</th><th class="text-right">Trend</th></tr>
+                    </thead>
+                    <tbody>
+                        {{range .TopLinks}}
+                        <tr>
+                            <td class="truncate max-w-48"><a href="/dashboard/links/{{.LinkID}}/stats" class="link link-hover font-mono">{{.Slug}}</a></td>
+                            <td class="text-right tabular-nums">{{.Count}}</td>
+                            <td class="text-right">
+                                {{/* Trend vs the previous equal-length period: the
+                                     "new" marker when the previous count is zero.
+                                     Governing: SPEC-0021 REQ "Global Analytics
+                                     Dashboard" — scenario "Trend against previous
+                                     period" */}}
+                                {{if .IsNew}}
+                                <span class="badge badge-success badge-sm" data-trend="new">new</span>
+                                {{else}}
+                                <span class="tabular-nums text-xs{{if .TrendUp}} text-success{{else}} text-error{{end}}" data-trend="pct">{{.TrendLabel}}</span>
+                                {{end}}
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+                {{else}}
+                <p class="text-sm text-base-content/50">No clicks in this period.</p>
+                {{end}}
+            </div>
+        </div>
+
+        <!-- Busiest referrers: top hosts across the scope's clicks -->
+        <div class="card bg-base-200 shadow">
+            <div class="card-body">
+                <h2 class="card-title text-base">Busiest Referrers</h2>
+                <p class="text-xs text-base-content/50">by host, last {{.PeriodDays}} days</p>
+                {{if .TopReferrers}}
+                <table class="table table-sm">
+                    <tbody>
+                        {{range .TopReferrers}}
+                        <tr><td class="truncate max-w-64">{{.Name}}</td><td class="text-right tabular-nums">{{.Count}}</td></tr>
+                        {{end}}
+                    </tbody>
+                </table>
+                {{else}}
+                <p class="text-sm text-base-content/50">No clicks in this period.</p>
+                {{end}}
+            </div>
+        </div>
+    </div>
+
+    <!-- Never-clicked links: created at least 7 days ago, zero recorded clicks.
+         With retention enabled a pruned history is indistinguishable from an
+         unclicked one, so the label is honest about it. -->
+    <!-- Governing: SPEC-0021 REQ "Global Analytics Dashboard", REQ "Click Retention" -->
+    <div class="card bg-base-200 shadow mb-4">
+        <div class="card-body">
+            <h2 class="card-title text-base">{{if .RetentionDays}}No clicks within retention{{else}}Never clicked{{end}}</h2>
+            <p class="text-xs text-base-content/50">
+                {{if .RetentionDays}}no clicks recorded within the {{.RetentionDays}}-day retention window (older history is pruned){{else}}created at least 7 days ago with no recorded clicks{{end}}
+            </p>
+            {{if .NeverClicked}}
+            <table class="table table-sm">
+                <tbody>
+                    {{range .NeverClicked}}
+                    <tr>
+                        <td class="truncate max-w-48"><a href="/dashboard/links/{{.LinkID}}/stats" class="link link-hover font-mono">{{.Slug}}</a></td>
+                        <td class="text-right text-xs text-base-content/50">created {{.CreatedAt.UTC.Format "Jan 2, 2006"}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="text-sm text-base-content/50">Nothing here — every eligible link has been clicked.</p>
+            {{end}}
+        </div>
+    </div>
+</div>
+{{end}}

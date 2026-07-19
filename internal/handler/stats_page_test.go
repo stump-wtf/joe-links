@@ -7,9 +7,9 @@ package handler
 //   - "Chart renders with gap days"
 //   - "Window toggle swaps fragment"
 //   - "Share recipient sees the chart"
-//   - "Pruned days distinguished from zero days" (template-level: retention
-//     wiring lands with the retention story #278; the chart's rendering
-//     contract is pinned here)
+//   - "Pruned days distinguished from zero days" (template-level; the
+//     JOE_CLICK_RETENTION configuration threading is pinned end-to-end in
+//     stats_retention_test.go, story #278)
 //
 // Governing: SPEC-0021 REQ "Per-Link Daily Time Series", ADR-0021
 
@@ -67,7 +67,7 @@ func newStatsChartEnv(t *testing.T) *statsChartEnv {
 		t.Fatalf("seed share: %v", err)
 	}
 
-	statsHandler := NewStatsHandler(ls, cs, owns)
+	statsHandler := NewStatsHandler(ls, cs, owns, 0)
 	r := chi.NewRouter()
 	r.Get("/dashboard/links/{id}/stats", statsHandler.Show)
 	r.Get("/dashboard/links/{id}/stats/chart", statsHandler.Chart)
@@ -284,11 +284,11 @@ func TestStatsChart_NonHTMXRedirectsToStatsPage(t *testing.T) {
 // Scenario: Pruned days distinguished from zero days — with a 60-day horizon
 // and the 90-day window, the oldest 30 day positions render as no-data bands,
 // visually distinct from zero-count days inside the horizon. Template-level:
-// the handler passes retentionDays=0 until the retention story (#278) wires
-// JOE_CLICK_RETENTION, so the rendering contract is pinned against the
-// partial directly. Also pins the deliberate partial-bucket decision: the
-// bucket containing the horizon (Pruned with Count > 0) renders BOTH the
-// no-data band and a lower-bound bar.
+// the rendering contract is pinned against the partial directly; the
+// JOE_CLICK_RETENTION handler threading is pinned end-to-end in
+// stats_retention_test.go (story #278). Also pins the deliberate
+// partial-bucket decision: the bucket containing the horizon (Pruned with
+// Count > 0) renders BOTH the no-data band and a lower-bound bar.
 // Governing: SPEC-0021 REQ "Per-Link Daily Time Series", REQ "Click Retention"
 func TestStatsChart_PrunedDaysDistinguishedFromZeroDays(t *testing.T) {
 	start := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC)

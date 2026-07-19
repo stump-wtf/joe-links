@@ -1,9 +1,11 @@
 // Governing: SPEC-0001 REQ "CLI Entrypoint", "OIDC-Only Authentication", "Server-Side Sessions", ADR-0003, ADR-0004
 // Governing: SPEC-0017 REQ "LLM Provider Configuration", ADR-0017
+// Governing: SPEC-0021 REQ "Click Retention", ADR-0021
 package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +39,11 @@ type Config struct {
 		BaseURL  string // override for openai-compatible providers
 		Prompt   string // custom prompt template text (overrides built-in default)
 	}
+	// ClickRetentionDays is the click retention horizon in days
+	// (JOE_CLICK_RETENTION). 0 (the default, unset) disables retention
+	// entirely — no click row is ever deleted. Pruned rows are unrecoverable.
+	// Governing: SPEC-0021 REQ "Click Retention", ADR-0021 (e)
+	ClickRetentionDays int
 	// Health configures the destination health checker goroutine.
 	// Governing: SPEC-0020 REQ "Destination Health Checking", ADR-0020
 	Health struct {
@@ -127,6 +134,27 @@ func Load() (*Config, error) {
 		timeout = 10 * time.Second
 	}
 	cfg.Health.Timeout = timeout
+
+	// Click retention (JOE_CLICK_RETENTION, integer days). Unset or 0 disables
+	// retention entirely — retention is off by default, because pruning is
+	// irreversible deletion of source-of-truth rows. Negative or non-integer
+	// values fail startup with a clear config error, and values 1–89 fail the
+	// ≥90-day floor protecting SPEC-0020's staleness views, which compute a
+	// 90-day window directly from link_clicks.
+	// Governing: SPEC-0021 REQ "Click Retention", ADR-0021 (e)
+	if raw := strings.TrimSpace(v.GetString("click_retention")); raw != "" {
+		days, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid JOE_CLICK_RETENTION %q: must be an integer number of days", raw)
+		}
+		if days < 0 {
+			return nil, fmt.Errorf("invalid JOE_CLICK_RETENTION %d: must not be negative (0 or unset disables retention)", days)
+		}
+		if days > 0 && days < 90 {
+			return nil, fmt.Errorf("invalid JOE_CLICK_RETENTION %d: must be at least 90 days — SPEC-0020's staleness views compute a 90-day window directly from link_clicks, and retention must not undercut it (SPEC-0021 REQ \"Click Retention\")", days)
+		}
+		cfg.ClickRetentionDays = days
+	}
 
 	if cfg.DB.Driver == "" {
 		return nil, fmt.Errorf("JOE_DB_DRIVER is required (sqlite3, mysql, postgres)")

@@ -61,6 +61,7 @@ All configuration uses environment variables prefixed with `JOE_`. You can also 
 | `JOE_SHORT_KEYWORD` | *(first DNS label of server hostname)* | Short-link prefix used in the UI and browser extension. Defaults to the first part of the server hostname (e.g. `go` from `go.example.com`). Set this explicitly if your hostname doesn't match your desired keyword (e.g. `JOE_SHORT_KEYWORD=go`) |
 | `JOE_SESSION_LIFETIME` | `720h` | Session absolute expiry (Go duration, default 30 days) |
 | `JOE_INSECURE_COOKIES` | `false` | Disable `Secure` flag on cookies (for local HTTP dev) |
+| `JOE_CLICK_RETENTION` | *(unset — retention off)* | Click retention horizon in integer days (minimum `90`). When set, a background pruner periodically deletes click rows older than the horizon. **Pruned rows are unrecoverable** — leave unset to keep click history forever (the default; nothing is ever deleted). With retention active, "all-time" totals become totals within the retention window and the UI labels them so. Run at most one instance with retention enabled |
 
 ### DSN Examples
 
