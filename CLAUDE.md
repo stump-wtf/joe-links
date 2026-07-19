@@ -41,6 +41,11 @@ Go + HTMX + DaisyUI/Tailwind. Single binary.
 | `JOE_LLM_BASE_URL` | *(provider default)* | Base URL override for Ollama or any OpenAI-compatible endpoint |
 | `JOE_LLM_PROMPT` | *(built-in default)* | Override the system prompt sent to the LLM |
 | `JOE_INSECURE_COOKIES` | `false` | When `true`, disables the `Secure` flag on session/auth cookies so login works over plain HTTP (local development only — never enable in production) |
+| `JOE_HEALTH_CHECKS_ENABLED` | `true` | Destination health checker on/off; set `false` on all but one instance in multi-replica deployments so destinations are probed once |
+| `JOE_HEALTH_CHECK_INTERVAL` | `24h` | Per-link health-check cadence (minimum enforced `1h`) |
+| `JOE_HEALTH_CHECK_TIMEOUT` | `10s` | Per-probe timeout (maximum enforced `30s`) |
+| `JOE_HEALTH_CHECK_ALLOW_PRIVATE` | `false` | Allow health probes to private/internal addresses — operator-level SSRF escape hatch for intranet deployments that shortlink internal services |
+| `JOE_CLICK_RETENTION` | *(unset — retention off)* | Click retention horizon in integer days (minimum `90` — SPEC-0020's staleness floor); when set, a background pruner deletes older click rows daily. **Pruning is irreversible**; unset keeps click history forever |
 
 ## Key Conventions
 
