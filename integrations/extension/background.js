@@ -1,4 +1,5 @@
 // Governing: SPEC-0008 REQ "Search Interception and Redirect", ADR-0012
+// Governing: SPEC-0019 REQ "Extension Omnibox Integration", ADR-0019
 'use strict';
 
 // Known search engines and their query parameter names.
@@ -354,3 +355,166 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
     Promise.resolve(chrome.tabs.update(details.tabId, { url: redirectFor(url.hostname, slug) })).catch(() => {});
   }
 });
+
+// --- Omnibox integration -----------------------------------------------------
+// Governing: SPEC-0019 REQ "Extension Omnibox Integration", ADR-0019
+
+// Debounce interval for omnibox keystrokes. The spec floor is 150 ms; rapid
+// keystrokes within this window coalesce into a single suggest request.
+// Governing: SPEC-0019 REQ "Extension Omnibox Integration" scenario "Debounce Coalesces Keystrokes"
+const OMNIBOX_DEBOUNCE_MS = 200;
+
+const OMNIBOX_DEFAULT_DESCRIPTION = 'Open the typed go link';
+const OMNIBOX_NO_PAT_DESCRIPTION =
+  'Set an API key in the joe-links options to see suggestions — Enter still opens the typed go link';
+
+// XML-escape text for omnibox suggestion descriptions: the omnibox API parses
+// the description string as XML, so a raw "&" or "<" in a slug or title would
+// make chrome.omnibox.suggest() throw.
+// Governing: SPEC-0019 REQ "Extension Omnibox Integration"
+function xmlEscape(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+// Map suggest-endpoint entries ({slug, title}) to omnibox suggestions: at most
+// 5, description shows "{prefix}/{slug}" plus the title when present, XML-
+// escaped. `content` carries the raw slug — onInputEntered receives it and
+// navigates via the resolver URL, never the raw destination, so server-side
+// visibility enforcement (SPEC-0010) always governs the redirect.
+// Governing: SPEC-0019 REQ "Extension Omnibox Integration"
+function mapOmniboxSuggestions(entries, prefix) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((e) => e && typeof e.slug === 'string' && e.slug !== '')
+    .slice(0, 5)
+    .map((e) => ({
+      content: e.slug,
+      description: (typeof e.title === 'string' && e.title !== '')
+        ? `${xmlEscape(`${prefix}/${e.slug}`)} — ${xmlEscape(e.title)}`
+        : xmlEscape(`${prefix}/${e.slug}`),
+    }));
+}
+
+// Build the resolver navigation URL for a selected slug or free typed text.
+// The text is always joined onto the configured base URL as path content —
+// never parsed with new URL(text) — so the destination is always same-origin
+// with the server and its visibility enforcement performs the actual redirect.
+// "/" is kept so keyword paths (jira/ABC-123) still resolve; "#" and "?" are
+// escaped so the whole text stays in the path (mirrors the search-interception
+// encoding above).
+// Governing: SPEC-0019 REQ "Extension Omnibox Integration" scenario "Suggestion Selection Navigates via Resolver"
+function omniboxResolverURL(baseURL, text) {
+  const trimmed = String(text).trim();
+  let encoded;
+  try {
+    encoded = encodeURI(trimmed);
+  } catch {
+    // encodeURI throws URIError on lone surrogates. Real omnibox input is
+    // well-formed, but Enter-to-navigate must never break: substitute the
+    // ill-formed sequences (U+FFFD) and encode that instead.
+    const wellFormed = typeof trimmed.toWellFormed === 'function'
+      ? trimmed.toWellFormed()
+      : trimmed.replace(/[\uD800-\uDFFF]/g, '�');
+    encoded = encodeURI(wellFormed);
+  }
+  encoded = encoded.replace(/#/g, '%23').replace(/\?/g, '%3F');
+  return `${String(baseURL).replace(/\/+$/, '')}/${encoded}`;
+}
+
+// Query GET {baseURL}/api/v1/links/suggest with the stored PAT, percent-
+// encoding the typed text. Returns null — without issuing any request — when
+// no PAT is configured (the endpoint is Bearer-only, SPEC-0008 REQ "API Key
+// Authentication"), and [] on empty input or any failure (network error, 401,
+// malformed body): suggest failures fail silently and never break
+// Enter-to-navigate.
+// Governing: SPEC-0019 REQ "Extension Omnibox Integration"
+async function fetchOmniboxSuggestions(text) {
+  const query = String(text).trim();
+  const { baseURL, apiKey, shortKeyword } = await chrome.storage.local.get({
+    baseURL: DEFAULTS.baseURL,
+    apiKey: '',
+    shortKeyword: DEFAULTS.shortKeyword,
+  });
+  // Governing: SPEC-0019 REQ "Extension Omnibox Integration" scenario "No PAT Configured"
+  if (!apiKey) return null;
+  if (!query) return [];
+  let serverHost;
+  try { serverHost = new URL(baseURL).hostname; } catch { return []; }
+  try {
+    const res = await fetch(`${baseURL}/api/v1/links/suggest?q=${encodeURIComponent(query)}`, {
+      signal: AbortSignal.timeout(5000),
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    // The short-link prefix in suggestion text uses the server's advertised
+    // keyword (JOE_SHORT_KEYWORD via GET /api/v1/config), falling back to the
+    // hostname's first label — same discovery as search interception.
+    // Governing: SPEC-0008 REQ "Keyword Host Discovery"
+    const prefix = resolveServerKeyword(serverHost, shortKeyword);
+    return mapOmniboxSuggestions(data && data.suggestions, prefix);
+  } catch {
+    return [];
+  }
+}
+
+// Register omnibox listeners only when the API exists: Safari references this
+// same background script from the Xcode project (SPEC-0015) and provides no
+// omnibox API, so its absence must not throw or affect any other extension
+// behavior — search interception above keeps working regardless.
+// Governing: SPEC-0019 REQ "Extension Omnibox Integration" scenario "Browser Without Omnibox API"
+if (typeof chrome !== 'undefined' && typeof chrome.omnibox !== 'undefined') {
+  // Never throws — a default-suggestion failure must not break the worker.
+  function setOmniboxDefault(description) {
+    try { chrome.omnibox.setDefaultSuggestion({ description }); } catch { /* unavailable — ignore */ }
+  }
+  setOmniboxDefault(OMNIBOX_DEFAULT_DESCRIPTION);
+
+  let omniboxTimer = null;
+  chrome.omnibox.onInputChanged.addListener((text, suggest) => {
+    // Coalesce rapid keystrokes: only the last input inside the debounce
+    // window issues a suggest request.
+    // Governing: SPEC-0019 REQ "Extension Omnibox Integration" scenario "Debounce Coalesces Keystrokes"
+    if (omniboxTimer !== null) clearTimeout(omniboxTimer);
+    omniboxTimer = setTimeout(async () => {
+      omniboxTimer = null;
+      const results = await fetchOmniboxSuggestions(text);
+      if (results === null) {
+        // No PAT configured: no request was sent; offer only a default
+        // suggestion prompting setup. Enter still navigates via the resolver.
+        // Governing: SPEC-0019 REQ "Extension Omnibox Integration" scenario "No PAT Configured"
+        setOmniboxDefault(OMNIBOX_NO_PAT_DESCRIPTION);
+        return;
+      }
+      setOmniboxDefault(OMNIBOX_DEFAULT_DESCRIPTION);
+      // suggest() throws once the input session is committed or dismissed.
+      try { suggest(results); } catch { /* input already committed */ }
+    }, OMNIBOX_DEBOUNCE_MS);
+  });
+
+  // Selecting a suggestion passes its `content` (the slug); pressing Enter on
+  // free text passes the typed text. Both navigate to the resolver URL so the
+  // server performs the redirect under its visibility rules.
+  // Governing: SPEC-0019 REQ "Extension Omnibox Integration" scenario "Suggestion Selection Navigates via Resolver"
+  chrome.omnibox.onInputEntered.addListener(async (text, disposition) => {
+    // The input session is over — cancel any pending debounce so a suggest
+    // request isn't issued after navigation has already happened.
+    if (omniboxTimer !== null) { clearTimeout(omniboxTimer); omniboxTimer = null; }
+    const { baseURL } = await chrome.storage.local.get({ baseURL: DEFAULTS.baseURL });
+    const url = omniboxResolverURL(baseURL, text);
+    try {
+      if (disposition === 'newForegroundTab') {
+        await chrome.tabs.create({ url });
+      } else if (disposition === 'newBackgroundTab') {
+        await chrome.tabs.create({ url, active: false });
+      } else {
+        await chrome.tabs.update({ url });
+      }
+    } catch { /* tab gone or call rejected — nothing to recover */ }
+  });
+}

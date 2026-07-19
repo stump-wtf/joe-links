@@ -3,6 +3,13 @@
 Navigate to `go/slug` links without typing `http://`.
 
 <!-- Governing: SPEC-0008 REQ "Firefox Compatibility", ADR-0012 -->
+<!-- Governing: SPEC-0019 REQ "Extension Omnibox Integration", ADR-0019 -->
+
+## Omnibox Suggestions
+
+Type `go` in the address bar followed by <kbd>Tab</kbd> or <kbd>Space</kbd> to enter keyword mode, then start typing — the extension queries `GET {baseURL}/api/v1/links/suggest` (debounced) with the API key configured in the options page and shows up to 5 matching links as `go/slug — Title` suggestions. Selecting a suggestion (or pressing <kbd>Enter</kbd> on free text) always navigates to the resolver URL `{baseURL}/{slug}` — never directly to a destination — so server-side visibility rules govern the redirect.
+
+Without an API key the omnibox makes no network calls: a default suggestion prompts you to configure one, and <kbd>Enter</kbd> still opens the typed slug via the resolver. Browsers without the omnibox API (Safari) skip this feature entirely; everything else keeps working.
 
 ## Browser Support
 
