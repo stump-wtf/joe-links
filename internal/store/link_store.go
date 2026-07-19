@@ -937,6 +937,70 @@ const (
 	linkActiveWhere = `l.archived_at IS NULL AND (l.expires_at IS NULL OR l.expires_at > ?)`
 )
 
+// didYouMeanLengthWindow bounds the did-you-mean candidate fetch in SQL: a
+// slug whose length differs from the requested slug by more than 2 cannot be
+// within Levenshtein distance 2 of it (each insertion/deletion changes length
+// by exactly 1), so the window is a necessary condition for the handler's
+// distance bound and excludes the bulk of the corpus before any distance is
+// computed (ADR-0019: bounded per-404 work, nothing cached).
+// Governing: SPEC-0019 REQ "Did-You-Mean 404 Suggestions", ADR-0019
+const didYouMeanLengthWindow = 2
+
+// DidYouMeanCandidates returns the candidate slugs for the 404 page's
+// did-you-mean block, filtered here in the shared store layer so discovery
+// surfaces cannot diverge on authorization (ADR-0019: one authorization code
+// path). Discoverability, not resolvability, is the governing test
+// (SPEC-0010): anonymous viewers — empty viewerID, which joins to no
+// ownership or share rows — are offered public slugs only, never private or
+// secure ones even though a private link would resolve if the exact slug were
+// known; authenticated non-admins additionally get their own/co-owned links
+// and links shared with them; admins get every slug. Expired and archived
+// links are excluded for all callers (SPEC-0020). Candidates are
+// length-bounded in SQL to ±2 of q; the handler computes the actual
+// Levenshtein distances, ordering, and result cap in Go (ADR-0019). LENGTH()
+// is portable across sqlite/mysql/postgres here because valid slugs are
+// ASCII (SPEC-0002), so byte and character semantics agree.
+// Governing: SPEC-0019 REQ "Did-You-Mean 404 Suggestions", ADR-0019, ADR-0002
+func (s *LinkStore) DidYouMeanCandidates(ctx context.Context, viewerID string, isAdmin bool, q string) ([]string, error) {
+	n := len([]rune(q))
+	if n == 0 {
+		return []string{}, nil
+	}
+	minLen, maxLen := n-didYouMeanLengthWindow, n+didYouMeanLengthWindow
+	now := time.Now().UTC()
+
+	var candidates []string
+	var err error
+	if isAdmin {
+		// Governing: SPEC-0010 REQ "Admin Visibility Override" — admins may be
+		// offered any slug; the lifecycle filter still applies.
+		err = s.db.SelectContext(ctx, &candidates, s.q(`
+			SELECT l.slug
+			FROM links l
+			WHERE `+linkActiveWhere+`
+			  AND LENGTH(l.slug) BETWEEN ? AND ?
+			ORDER BY l.slug ASC
+		`), now, minLen, maxLen)
+	} else {
+		err = s.db.SelectContext(ctx, &candidates, s.q(`
+			SELECT DISTINCT l.slug
+			FROM links l
+			`+linkViewerJoins+`
+			WHERE `+linkVisibleWhere+`
+			  AND `+linkActiveWhere+`
+			  AND LENGTH(l.slug) BETWEEN ? AND ?
+			ORDER BY l.slug ASC
+		`), viewerID, viewerID, now, minLen, maxLen)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if candidates == nil {
+		candidates = []string{}
+	}
+	return candidates, nil
+}
+
 // suggestRow is a Link plus its ranking band, computed in SQL so the
 // candidate cap can never cut a better-band row in favor of a worse one.
 type suggestRow struct {

@@ -12,6 +12,23 @@
             <p class="text-base-content/60 mb-6">
                 There's no short link for <span class="font-mono font-semibold">{{.Slug}}</span> yet.
             </p>
+            {{/* Did-you-mean (SPEC-0019): up to 3 nearest discoverable slugs,
+                 visibility-filtered in the store and distance-bounded in the
+                 handler. Each renders as {keyword}/{slug} but links to /{slug}
+                 so the resolver's own visibility enforcement (SPEC-0010)
+                 governs the actual redirect. Rendered above the create CTA;
+                 when empty, the page is unchanged. */}}
+            {{if .Suggestions}}
+            <!-- Governing: SPEC-0019 REQ "Did-You-Mean 404 Suggestions" -->
+            <div class="mb-6">
+                <p class="font-semibold mb-2">Did you mean&hellip;</p>
+                <ul class="space-y-1">
+                    {{range .Suggestions}}
+                    <li><a href="/{{.}}" class="link link-primary font-mono">{{$.ShortKeyword}}/{{.}}</a></li>
+                    {{end}}
+                </ul>
+            </div>
+            {{end}}
             {{/* Server-side gate (issue #260): only offer creation when the
                  missed path (or its first segment) is a valid, non-reserved
                  slug — .Creatable/.Candidate come from creatableCandidate,

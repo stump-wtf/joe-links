@@ -4,7 +4,7 @@
 // Governing: SPEC-0009 REQ "Multi-Segment Path Resolution", REQ "Variable Substitution and Redirect", ADR-0013
 // Governing: SPEC-0010 REQ "Secure Link Resolution", REQ "Public Link Resolution", REQ "Private Link Resolution", ADR-0014
 // Governing: SPEC-0016 REQ "Click Recording", REQ "Prometheus Metrics Endpoint", ADR-0016
-// Governing: SPEC-0019 REQ "Case-Insensitive Slug Resolution", REQ "Slug Normalization Forgiveness", ADR-0019
+// Governing: SPEC-0019 REQ "Case-Insensitive Slug Resolution", REQ "Slug Normalization Forgiveness", REQ "Did-You-Mean 404 Suggestions", ADR-0019
 // Governing: SPEC-0020 REQ "Expired Link Resolution", REQ "Archived Link Resolution", ADR-0020
 package handler
 
@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,6 +53,11 @@ type notFoundPage struct {
 	Candidate string
 	Creatable bool
 	Flash     *Flash
+	// Suggestions are the did-you-mean slugs rendered above the create CTA,
+	// nearest first. Empty (the common case) renders the page exactly as it
+	// did before SPEC-0019.
+	// Governing: SPEC-0019 REQ "Did-You-Mean 404 Suggestions"
+	Suggestions []string
 }
 
 // creatableCandidate returns the slug the 404 page may offer to create for a
@@ -469,12 +475,119 @@ func realIP(r *http.Request) string {
 	return host
 }
 
+// Did-you-mean bounds, enforced server-side (SPEC-0019): only candidates
+// within plain Levenshtein distance 2 qualify, and at most 3 render.
+// Governing: SPEC-0019 REQ "Did-You-Mean 404 Suggestions", ADR-0019
+const (
+	maxDidYouMeanDistance    = 2
+	maxDidYouMeanSuggestions = 3
+)
+
+// levenshtein returns the plain Levenshtein edit distance between a and b in
+// runes: insertions, deletions, and substitutions each cost 1. ADR-0019 chose
+// plain distance — no transposition move — so a swap like "jria"→"jira" costs
+// 2 and still qualifies under the ≤2 bound. Two-row DP, O(len(a)·len(b)).
+// Governing: SPEC-0019 REQ "Did-You-Mean 404 Suggestions", ADR-0019
+func levenshtein(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	if len(ra) == 0 {
+		return len(rb)
+	}
+	if len(rb) == 0 {
+		return len(ra)
+	}
+	prev := make([]int, len(rb)+1)
+	curr := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		curr[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			curr[j] = min(prev[j]+1, curr[j-1]+1, prev[j-1]+cost)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(rb)]
+}
+
+// didYouMeanSuggestions computes the 404 page's "Did you mean" slugs for a
+// missed path. Only the first path segment is matched, lowercased to align
+// with the canonically lowercase slug corpus (SPEC-0002); empty and
+// single-character paths get no suggestions. Candidates come from the store
+// visibility-filtered to what the viewer may discover (anonymous → public
+// only; authenticated → plus own/co-owned/shared; admin → all; expired and
+// archived always excluded) and length-bounded in SQL; the distance bound
+// (≤2), ordering (ascending distance, ties by slug ascending in byte order),
+// and result cap (3) are enforced here, in Go, per ADR-0019. Suggestions are
+// best-effort: on store error the 404 renders without them. This runs only
+// after case-folded exact lookup, normalization forgiveness, and prefix
+// matching have all missed — render404 is the end of the resolution chain.
+// Governing: SPEC-0019 REQ "Did-You-Mean 404 Suggestions", ADR-0019
+func (h *ResolveHandler) didYouMeanSuggestions(r *http.Request, path string) []string {
+	first, _, _ := strings.Cut(path, "/")
+	q := strings.ToLower(first)
+	if len([]rune(q)) <= 1 {
+		return nil
+	}
+	viewerID, isAdmin := "", false
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		viewerID, isAdmin = user.ID, user.IsAdmin()
+	}
+	candidates, err := h.links.DidYouMeanCandidates(r.Context(), viewerID, isAdmin, q)
+	if err != nil {
+		log.Printf("did-you-mean: candidate query failed for %q: %v", q, err)
+		return nil
+	}
+	type scored struct {
+		slug string
+		dist int
+	}
+	var qualified []scored
+	for _, slug := range candidates {
+		// A candidate equal to the requested segment is the very slug that
+		// just failed to resolve (an archived match or a variable link with
+		// the wrong arity) — suggesting it would link straight back to this
+		// 404.
+		if slug == q {
+			continue
+		}
+		if d := levenshtein(q, slug); d <= maxDidYouMeanDistance {
+			qualified = append(qualified, scored{slug: slug, dist: d})
+		}
+	}
+	sort.Slice(qualified, func(i, j int) bool {
+		if qualified[i].dist != qualified[j].dist {
+			return qualified[i].dist < qualified[j].dist
+		}
+		// Go string comparison is byte order on every platform, unlike SQL
+		// collations (see SuggestLinks).
+		return qualified[i].slug < qualified[j].slug
+	})
+	if len(qualified) > maxDidYouMeanSuggestions {
+		qualified = qualified[:maxDidYouMeanSuggestions]
+	}
+	out := make([]string, len(qualified))
+	for i, s := range qualified {
+		out[i] = s.slug
+	}
+	return out
+}
+
 // render404 renders the 404 page for a missing slug. offerCreate=false
 // suppresses the create CTA unconditionally — used when resolution already
 // matched an existing link (a variable link visited with the wrong arity), so
 // creating the candidate slug is guaranteed to fail with ErrSlugTaken.
 func (h *ResolveHandler) render404(w http.ResponseWriter, r *http.Request, slug string, offerCreate bool) {
 	user := auth.UserFromContext(r.Context())
+	// Governing: SPEC-0019 REQ "Did-You-Mean 404 Suggestions" — computed
+	// before the header is written, for the full page and the HTMX fragment
+	// alike.
+	suggestions := h.didYouMeanSuggestions(r, slug)
 	w.WriteHeader(http.StatusNotFound)
 	// Only offer creation for paths that could actually become links —
 	// a CTA that lands on an immediate validation error is a dead end
@@ -483,7 +596,7 @@ func (h *ResolveHandler) render404(w http.ResponseWriter, r *http.Request, slug 
 	if offerCreate {
 		candidate, creatable = creatableCandidate(slug)
 	}
-	data := notFoundPage{BasePage: newBasePage(r, user), User: user, Slug: slug, Candidate: candidate, Creatable: creatable}
+	data := notFoundPage{BasePage: newBasePage(r, user), User: user, Slug: slug, Candidate: candidate, Creatable: creatable, Suggestions: suggestions}
 	if isHTMX(r) {
 		renderPageFragment(w, "404.html", "content", data)
 		return
