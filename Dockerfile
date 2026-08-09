@@ -25,7 +25,7 @@ RUN PKG="github.com/joestump/joe-links/internal/build" && \
 
 # Stage 3 — final
 # Pinned base for reproducible builds — never a floating :latest tag.
-FROM alpine:3.22
+FROM alpine:3.24
 # Non-root runtime user; /data is pre-created and chowned so a fresh named
 # volume mounted there inherits ownership the SQLite DSN can write to.
 RUN apk add --no-cache ca-certificates tzdata && \
