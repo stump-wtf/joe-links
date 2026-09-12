@@ -1,0 +1,19 @@
+# Gitleaks config — extends the built-in ruleset with this repo's allowlist.
+#
+# The API guides show curl examples with placeholder bearer tokens
+# (jl_your_token_here); these files contain no credentials and the
+# placeholder trips the curl-auth-header rule across history.
+#
+# @joestump-agent 09/12/2026 - Added to unblock the gitleaks gate, which
+#   failed on these two docs files on every PR and every main push since
+#   commit ee6efda.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Docs curl examples use placeholder bearer tokens"
+paths = [
+  '''(^|/)README\.md$''',
+  '''docs-site/docs-static/guides/api-guide\.md$''',
+]
