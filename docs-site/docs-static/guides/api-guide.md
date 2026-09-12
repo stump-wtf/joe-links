@@ -20,7 +20,7 @@ joe-links provides a REST API at `/api/v1` for programmatic link management. All
 Include your token in the `Authorization` header as a Bearer token:
 
 ```bash
-curl -H "Authorization: Bearer jl_your_token_here" \
+curl -H "Authorization: Bearer $JOE_TOKEN" \
   https://go.example.com/api/v1/links
 ```
 
@@ -29,7 +29,7 @@ curl -H "Authorization: Bearer jl_your_token_here" \
 ```python
 import requests
 
-headers = {"Authorization": "Bearer jl_your_token_here"}
+headers = {"Authorization": "Bearer $JOE_TOKEN"}
 resp = requests.get("https://go.example.com/api/v1/links", headers=headers)
 links = resp.json()
 ```

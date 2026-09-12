@@ -84,7 +84,7 @@ joe-links provides a REST API at `/api/v1`, authenticated via Bearer token (Pers
 Create a PAT from the dashboard under **Settings > API Tokens**. Then use it in requests:
 
 ```bash
-curl -H "Authorization: Bearer jl_your_token_here" \
+curl -H "Authorization: Bearer $JOE_TOKEN" \
   https://go.example.com/api/v1/links
 ```
 
