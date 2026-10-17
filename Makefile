@@ -1,9 +1,32 @@
-.PHONY: build run migrate css clean tidy swagger dev dev-stop docker-build docker-up docker-down ext-safari
+.PHONY: build check lint fmt vet tidy-check run migrate css clean tidy swagger dev dev-stop docker-build docker-up docker-down ext-safari
 
 BINARY := joe-links
 
 build: css
 	go build -o bin/$(BINARY) ./cmd/joe-links
+
+# Full CI gate: static checks plus the test suite.
+check: lint test
+
+# Static checks only (the uniform `make lint` entry point).
+lint: fmt vet tidy-check
+
+fmt:
+	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt would reformat:"; echo "$$unformatted"; exit 1; \
+	fi
+
+vet:
+	go vet ./...
+
+tidy-check:
+	@go mod tidy -diff || { \
+		echo "go.mod/go.sum are not tidy — run 'make tidy' and commit the result"; exit 1; \
+	}
+
+test:
+	go test ./...
 
 run: css
 	go run ./cmd/joe-links serve
