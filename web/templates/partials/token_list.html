@@ -32,12 +32,12 @@
               class="flex flex-col sm:flex-row gap-3 items-end">
             <div class="form-control flex-1">
                 <label class="label"><span class="label-text">Token name</span></label>
-                <input type="text" name="name" class="input input-bordered w-full"
+                <input type="text" name="name" class="input w-full"
                        placeholder="e.g. CI/CD pipeline" required>
             </div>
             <div class="form-control w-full sm:w-48">
                 <label class="label"><span class="label-text">Expires in</span></label>
-                <select name="expires_in" class="select select-bordered w-full">
+                <select name="expires_in" class="select w-full">
                     <option value="">Never</option>
                     <option value="720h">30 days</option>
                     <option value="2160h">90 days</option>

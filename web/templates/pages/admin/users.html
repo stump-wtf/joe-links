@@ -40,7 +40,7 @@
 <tr id="user-{{.ID}}">
     <td>
         <div class="flex items-center gap-2">
-            <div class="avatar placeholder">
+            <div class="avatar avatar-placeholder">
                 <div class="bg-neutral text-neutral-content rounded-full w-7">
                     <span class="text-xs">{{slice .DisplayName 0 1}}</span>
                 </div>
@@ -52,7 +52,7 @@
     <td class="text-sm text-base-content/60">{{.Provider}}</td>
     <td>
         <!-- Governing: SPEC-0004 REQ "Admin Dashboard" — inline role toggle via HTMX -->
-        <select class="select select-bordered select-xs"
+        <select class="select select-xs"
                 hx-put="/admin/users/{{.ID}}/role"
                 hx-target="#user-{{.ID}}"
                 hx-swap="outerHTML"

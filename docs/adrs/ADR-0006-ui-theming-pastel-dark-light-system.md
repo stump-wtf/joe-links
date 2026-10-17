@@ -29,7 +29,7 @@ The application needs a visual identity that is fun, approachable, and distinct 
 
 Chosen option: **Two custom DaisyUI themes (`joe-light` and `joe-dark`) with system-default detection, user override via a theme toggle, and cookie-based persistence.**
 
-DaisyUI themes are defined as CSS property sets in `tailwind.config.js` under the `daisyui.themes` key. Both themes share the same pastel palette with light/dark variants. The active theme is applied via `data-theme` on the `<html>` element. On first visit (no cookie), the server reads the `prefers-color-scheme` media feature via a tiny inline `<script>` that runs before paint to set `data-theme` without a flash. Once the user explicitly toggles, the choice is written to a `theme` cookie and respected on subsequent server renders.
+DaisyUI themes are defined as CSS property sets in `static/css/input.css` as `@plugin "daisyui/theme"` blocks (Tailwind v4 / daisyUI v5 CSS-first config; originally `tailwind.config.js` under the `daisyui.themes` key). Both themes share the same pastel palette with light/dark variants. The active theme is applied via `data-theme` on the `<html>` element. On first visit (no cookie), the server reads the `prefers-color-scheme` media feature via a tiny inline `<script>` that runs before paint to set `data-theme` without a flash. Once the user explicitly toggles, the choice is written to a `theme` cookie and respected on subsequent server renders.
 
 ### Pastel Color Palette
 
@@ -69,7 +69,7 @@ Both themes are built around a warm pastel palette. Backgrounds and foregrounds 
 
 ### Confirmation
 
-Confirmed by: `tailwind.config.js` containing `daisyui: { themes: ["joe-light", "joe-dark"] }` with full color definitions; base layout template setting `data-theme` from a template variable; a `/dashboard/theme` POST route; inline anti-flash `<script>` present before stylesheets in `<head>`.
+Confirmed by: `static/css/input.css` containing `@plugin "daisyui/theme"` blocks for `joe-light` and `joe-dark` with full color definitions (formerly `tailwind.config.js` before the Tailwind v4 / daisyUI v5 migration); base layout template setting `data-theme` from a template variable; a `/dashboard/theme` POST route; inline anti-flash `<script>` present before stylesheets in `<head>`.
 
 ## Pros and Cons of the Options
 

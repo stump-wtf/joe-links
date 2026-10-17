@@ -5,9 +5,9 @@
 ## 1. Tailwind and DaisyUI Configuration
 
 - [ ] 1.1 Add DaisyUI dependency to `package.json` / build toolchain; configure Tailwind with `daisyui` plugin (ADR-0001)
-- [ ] 1.2 Define `joe-light` theme in `tailwind.config.js` with all required color tokens: primary, primary-content, secondary, accent, neutral, base-100/200/300, base-content, info, success, warning, error (REQ "Custom DaisyUI Themes")
-- [ ] 1.3 Define `joe-dark` theme in `tailwind.config.js` with the dark pastel palette (REQ "Custom DaisyUI Themes")
-- [ ] 1.4 Set `daisyui.themes` to `["joe-light", "joe-dark"]` — no built-in themes (REQ "Custom DaisyUI Themes")
+- [ ] 1.2 Define `joe-light` theme in `static/css/input.css` with all required color tokens: primary, primary-content, secondary, accent, neutral, base-100/200/300, base-content, info, success, warning, error (REQ "Custom DaisyUI Themes")
+- [ ] 1.3 Define `joe-dark` theme in `static/css/input.css` with the dark pastel palette (REQ "Custom DaisyUI Themes")
+- [ ] 1.4 Set `themes: false` in the `@plugin "daisyui"` block and declare both themes via `@plugin "daisyui/theme"` blocks — no built-in themes (REQ "Custom DaisyUI Themes")
 - [ ] 1.5 Run Tailwind build and verify compiled CSS contains both theme CSS custom property blocks
 - [ ] 1.6 Verify WCAG AA contrast ratios for `base-content`/`base-100` and `primary-content`/`primary` pairs in both themes using a contrast checker (REQ "WCAG AA Color Contrast")
 

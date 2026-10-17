@@ -27,7 +27,7 @@ See ADR-0006 for the full decision record.
 
 **Choice**: Two fully custom themes (`joe-light`, `joe-dark`) rather than built-in DaisyUI themes like `cupcake` or `dark`.
 
-**Rationale**: Built-in themes are overused and don't match the desired pastel aesthetic. Defining custom themes in `tailwind.config.js` provides full color control with zero runtime overhead — DaisyUI compiles theme variables into CSS custom properties at build time.
+**Rationale**: Built-in themes are overused and don't match the desired pastel aesthetic. Defining custom themes in `static/css/input.css` as daisyUI `@plugin` blocks provides full color control with zero runtime overhead — DaisyUI compiles theme variables into CSS custom properties at build time.
 
 ### Cookie Over localStorage for Theme Persistence
 
@@ -113,67 +113,40 @@ sequenceDiagram
 - `primary-content` (#ffffff) on `primary` (#c084fc) — joe-light: **~3.2:1** (AA for large text); verify with contrast checker before shipping
 - `primary-content` (#ffffff) on `primary` (#a855f7) — joe-dark: **~3.9:1** (AA for large text); verify with contrast checker before shipping
 
-### Tailwind Config Structure
 
-```js
-// Governing: SPEC-0003 REQ "Custom DaisyUI Themes", SPEC-0003 REQ "WCAG AA Color Contrast", ADR-0006
-// tailwind.config.js
-module.exports = {
-  content: ["./web/templates/**/*.html"],
-  plugins: [require("daisyui")],
-  daisyui: {
-    themes: [
-      {
-        "joe-light": {
-          "primary": "#c084fc",
-          "primary-content": "#ffffff",
-          "secondary": "#fb923c",
-          "secondary-content": "#ffffff",
-          "accent": "#34d399",
-          "accent-content": "#ffffff",
-          "neutral": "#6b7280",
-          "neutral-content": "#ffffff",
-          "base-100": "#ffffff",
-          "base-200": "#f5f5f5",
-          "base-300": "#e8e8e8",
-          "base-content": "#000000",
-          "info": "#67e8f9",
-          "info-content": "#000000",
-          "success": "#86efac",
-          "success-content": "#000000",
-          "warning": "#fde68a",
-          "warning-content": "#000000",
-          "error": "#fca5a5",
-          "error-content": "#000000",
-        },
-      },
-      {
-        "joe-dark": {
-          "primary": "#a855f7",
-          "primary-content": "#ffffff",
-          "secondary": "#f97316",
-          "secondary-content": "#ffffff",
-          "accent": "#10b981",
-          "accent-content": "#ffffff",
-          "neutral": "#9ca3af",
-          "neutral-content": "#000000",
-          "base-100": "#111111",
-          "base-200": "#1c1c1c",
-          "base-300": "#2a2a2a",
-          "base-content": "#ffffff",
-          "info": "#22d3ee",
-          "info-content": "#000000",
-          "success": "#4ade80",
-          "success-content": "#000000",
-          "warning": "#fbbf24",
-          "warning-content": "#000000",
-          "error": "#f87171",
-          "error-content": "#000000",
-        },
-      },
-    ],
-    darkTheme: "joe-dark",
-  },
+### Tailwind CSS + daisyUI Config Structure
+
+Tailwind v4 and daisyUI v5 use CSS-first configuration. Themes live in
+`static/css/input.css` as `@plugin` blocks (the JS `tailwind.config.js` is
+gone); `@source` declares the template globs Tailwind scans for classes.
+
+```css
+/* Governing: SPEC-0003 REQ "Custom DaisyUI Themes", SPEC-0003 REQ "WCAG AA Color Contrast", ADR-0006 */
+@import "tailwindcss";
+
+@source "../../web/templates/**/*.html";
+
+@plugin "daisyui" {
+  themes: false;
+}
+
+@plugin "daisyui/theme" {
+  name: "joe-light";
+  default: true;
+  color-scheme: light;
+  --color-primary: #c084fc;
+  --color-primary-content: #160030;
+  /* ... same pastel token set as the v4 config: secondary, accent, neutral,
+     base-100/200/300, base-content, info, success, warning, error ... */
+}
+
+@plugin "daisyui/theme" {
+  name: "joe-dark";
+  prefersdark: true;
+  color-scheme: dark;
+  --color-primary: #a855f7;
+  --color-primary-content: #160030;
+  /* ... dark pastel palette ... */
 }
 ```
 

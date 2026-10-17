@@ -3,7 +3,6 @@ FROM node:20-alpine AS css-builder
 WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY tailwind.config.js postcss.config.js* ./
 COPY static/ static/
 COPY web/ web/
 RUN npm run build
