@@ -1,6 +1,104 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Governing: SPEC-0003 REQ "Custom DaisyUI Themes", SPEC-0003 REQ "WCAG AA Color Contrast", ADR-0006
+ *
+ * Tailwind CSS v4 + daisyUI v5 entry point. Tailwind v4 replaced the JS
+ * tailwind.config.js with CSS-first config: templates to scan are declared
+ * with @source (paths are relative to this file), and daisyUI themes are
+ * declared as @plugin blocks instead of entries in tailwind.config.js.
+ *
+ * @joestump-agent 10/17/2026 - Migrated to Tailwind v4 + daisyUI v5 per
+ *   renovate PR #318. Moved the custom joe-light/joe-dark theme definitions
+ *   here from the removed tailwind.config.js; kept the same palette so both
+ *   themes render unchanged.
+ */
+@import "tailwindcss";
+
+@source "../../web/templates/**/*.html";
+
+@plugin "daisyui" {
+  themes: false;
+}
+
+@plugin "daisyui/theme" {
+  name: "joe-light";
+  default: true;
+  color-scheme: light;
+  --color-primary: #c084fc;
+  --color-primary-content: #160030;
+  --color-secondary: #fb923c;
+  --color-secondary-content: #000000;
+  --color-accent: #34d399;
+  --color-accent-content: #000000;
+  --color-neutral: #6b7280;
+  --color-neutral-content: #ffffff;
+  --color-base-100: #ffffff;
+  --color-base-200: #f5f5f5;
+  --color-base-300: #e8e8e8;
+  --color-base-content: #000000;
+  --color-info: #67e8f9;
+  --color-info-content: #000000;
+  --color-success: #86efac;
+  --color-success-content: #000000;
+  --color-warning: #fde68a;
+  --color-warning-content: #000000;
+  --color-error: #fca5a5;
+  --color-error-content: #000000;
+}
+
+@plugin "daisyui/theme" {
+  name: "joe-dark";
+  prefersdark: true;
+  color-scheme: dark;
+  --color-primary: #a855f7;
+  --color-primary-content: #160030;
+  --color-secondary: #f97316;
+  --color-secondary-content: #000000;
+  --color-accent: #10b981;
+  --color-accent-content: #000000;
+  --color-neutral: #9ca3af;
+  --color-neutral-content: #000000;
+  --color-base-100: #111111;
+  --color-base-200: #1c1c1c;
+  --color-base-300: #2a2a2a;
+  --color-base-content: #ffffff;
+  --color-info: #22d3ee;
+  --color-info-content: #000000;
+  --color-success: #4ade80;
+  --color-success-content: #000000;
+  --color-warning: #fbbf24;
+  --color-warning-content: #000000;
+  --color-error: #f87171;
+  --color-error-content: #000000;
+}
+
+/* daisyUI 5 removed the v4 form layout classes (form-control, label-text,
+   label-text-alt) and restyled .label (inline-flex, dimmed, no padding).
+   The templates still use the v4 form markup, so restore those styles here
+   to keep every form rendering as it did on daisyUI 4. Remove this shim
+   when the forms are migrated to the v5 fieldset/legend pattern. */
+.form-control {
+    display: flex;
+    flex-direction: column;
+}
+.label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding-block: 0.5rem;
+    color: inherit;
+    white-space: normal;
+    user-select: none;
+}
+.label-text {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    color: inherit;
+}
+.label-text-alt {
+    font-size: 0.75rem;
+    line-height: 1rem;
+    color: inherit;
+}
 
 /* Governing: SPEC-0004 REQ "New Link Form" — tag autocomplete via HTMX.
    When HTMX swaps in zero suggestions the empty .menu box (padding + shadow,

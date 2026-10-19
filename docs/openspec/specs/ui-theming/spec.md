@@ -12,7 +12,7 @@ See ADR-0006 (UI Theming), ADR-0001 (Technology Stack — DaisyUI + Tailwind).
 
 ### Requirement: Custom DaisyUI Themes
 
-The application MUST define exactly two custom DaisyUI themes: `joe-light` (pastel light theme) and `joe-dark` (pastel dark theme). Both themes MUST be declared in `tailwind.config.js` under the `daisyui.themes` array. No built-in DaisyUI themes SHOULD be used as the application's primary themes. All color tokens (primary, secondary, accent, neutral, base-100/200/300, info, success, warning, error) MUST be explicitly defined for both themes.
+The application MUST define exactly two custom DaisyUI themes: `joe-light` (pastel light theme) and `joe-dark` (pastel dark theme). Both themes MUST be declared in `static/css/input.css` as `@plugin "daisyui/theme"` blocks. No built-in DaisyUI themes SHOULD be used as the application's primary themes. All color tokens (primary, secondary, accent, neutral, base-100/200/300, info, success, warning, error) MUST be explicitly defined for both themes.
 
 The authoritative palette is defined in ADR-0006. Backgrounds MUST be true white (`#ffffff`) in light mode and near-black (`#111111`) in dark mode. Foreground text MUST be true black (`#000000`) in light mode and true white (`#ffffff`) in dark mode. Pastel accent colors (lilac primary, peach secondary, mint accent, rose-red error) are layered on top of these neutral bases.
 
