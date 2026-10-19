@@ -42,7 +42,7 @@ type Config struct {
 	// here would silently widen who may rewrite the observed client IP.
 	// Governing: ADR-0023
 	TrustedProxies []string
-	LLM             struct {
+	LLM            struct {
 		Provider string // "anthropic", "openai", or "openai-compatible"; empty = disabled
 		APIKey   string
 		Model    string
