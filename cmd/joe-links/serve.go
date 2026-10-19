@@ -145,6 +145,7 @@ func newServeCmd() *cobra.Command {
 				Suggester:      suggester,
 				ShortKeyword:   cfg.ShortKeyword,
 				RetentionDays:  cfg.ClickRetentionDays,
+				TrustedProxies: cfg.TrustedProxies,
 			})
 
 			srv := &http.Server{

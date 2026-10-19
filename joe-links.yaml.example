@@ -40,6 +40,17 @@ session:
 # instance in multi-replica deployments.
 # click_retention: 365
 
+# --- Client IP trust (ADR-0023) ---
+# CIDRs whose X-Forwarded-For may be believed when resolving the client IP
+# (JOE_TRUSTED_PROXIES). Unset (the default) believes no caller-supplied header:
+# the client IP is the address that opened the connection, so nobody can rewrite
+# the IP a click is recorded under. Set it to your reverse proxy when joe-links
+# sits behind one, otherwise analytics record the proxy for every click.
+# A bare address is read as a single-address prefix. Example: proxy on localhost.
+# trusted_proxies:
+#   - 127.0.0.1/32
+#   - ::1/128
+
 # --- LLM slug suggestions (optional — omit provider to disable) ---
 # llm:
 #   provider: anthropic        # "anthropic", "openai", or "openai-compatible"

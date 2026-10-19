@@ -83,6 +83,18 @@ The `ip_hash` MUST be computed as `SHA-256(clientIP + ":" + dailySalt)` where
 `dailySalt` is derived from the current UTC date (format `YYYYMMDD`). The salt
 MUST rotate at UTC midnight.
 
+`clientIP` is the address the server attributes the request to, resolved by the
+trust model of ADR-0023: the address that opened the connection, or — only when
+that peer is a configured trusted proxy — the client's address taken from
+`X-Forwarded-For`. A value supplied by an untrusted peer MUST NOT be used.
+
+#### Scenario: Spoofed client IP header
+
+- **WHEN** a request whose peer is not a configured trusted proxy claims some
+  other address in `X-Forwarded-For`, `X-Real-IP` or `True-Client-IP`
+- **THEN** the stored `ip_hash` is the one for the address that opened the
+  connection
+
 #### Scenario: Authenticated click
 
 - **WHEN** a logged-in user clicks a link

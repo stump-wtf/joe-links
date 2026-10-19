@@ -8,6 +8,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -181,5 +183,84 @@ func TestClickRetentionConfig_BelowStalenessFloorFailsStartup(t *testing.T) {
 	}
 	if cfg.ClickRetentionDays != 90 {
 		t.Errorf("ClickRetentionDays = %d, want 90", cfg.ClickRetentionDays)
+	}
+}
+
+// Client IP trust: the default believes no caller-supplied header, entries are
+// normalized to canonical CIDRs for the router's peer check, and a typo fails
+// startup instead of quietly widening who can rewrite the observed client IP.
+//
+// Governing: ADR-0023
+
+func TestTrustedProxies_DefaultIsEmpty(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Errorf("TrustedProxies = %v, want empty: with no proxy configured no caller-supplied header may be believed", cfg.TrustedProxies)
+	}
+}
+
+func TestTrustedProxies_NormalizedToCIDRs(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("JOE_TRUSTED_PROXIES", "127.0.0.1, 10.0.0.0/8, ::1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"127.0.0.1/32", "10.0.0.0/8", "::1/128"}
+	if len(cfg.TrustedProxies) != len(want) {
+		t.Fatalf("TrustedProxies = %v, want %v", cfg.TrustedProxies, want)
+	}
+	for i, w := range want {
+		if cfg.TrustedProxies[i] != w {
+			t.Errorf("TrustedProxies[%d] = %q, want %q", i, cfg.TrustedProxies[i], w)
+		}
+	}
+}
+
+func TestTrustedProxies_RejectsUnparsableEntries(t *testing.T) {
+	setRequiredEnv(t)
+	for _, v := range []string{"localhost", "10.0.0.0/33", "10.0.0.0/8, nope"} {
+		t.Setenv("JOE_TRUSTED_PROXIES", v)
+		_, err := Load()
+		if err == nil {
+			t.Errorf("Load accepted JOE_TRUSTED_PROXIES=%q", v)
+			continue
+		}
+		if !strings.Contains(err.Error(), "JOE_TRUSTED_PROXIES") {
+			t.Errorf("error must name the setting; got %q", err)
+		}
+	}
+}
+
+// The YAML form of the setting arrives as a list rather than the env form's
+// one comma-separated string, so the list branch of the flattener needs its
+// own proof that entries are normalized. Load reads joe-links.yaml from the
+// working directory only, so the test runs in a temp dir holding one.
+//
+// Governing: ADR-0023
+func TestTrustedProxies_YAMLListNormalizedToCIDRs(t *testing.T) {
+	setRequiredEnv(t)
+	dir := t.TempDir()
+	cfgYAML := "trusted_proxies:\n  - 127.0.0.1\n  - 10.0.0.0/8\n"
+	if err := os.WriteFile(filepath.Join(dir, "joe-links.yaml"), []byte(cfgYAML), 0o600); err != nil {
+		t.Fatalf("write joe-links.yaml: %v", err)
+	}
+	t.Chdir(dir)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"127.0.0.1/32", "10.0.0.0/8"}
+	if len(cfg.TrustedProxies) != len(want) {
+		t.Fatalf("TrustedProxies = %v, want %v", cfg.TrustedProxies, want)
+	}
+	for i, w := range want {
+		if cfg.TrustedProxies[i] != w {
+			t.Errorf("TrustedProxies[%d] = %q, want %q", i, cfg.TrustedProxies[i], w)
+		}
 	}
 }

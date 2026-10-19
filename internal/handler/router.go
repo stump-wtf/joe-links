@@ -45,6 +45,12 @@ type Deps struct {
 	// retention disabled (the default).
 	// Governing: SPEC-0021 REQ "Click Retention", ADR-0021
 	RetentionDays int
+	// TrustedProxies are the CIDRs whose X-Forwarded-For may be believed when
+	// resolving the client IP (JOE_TRUSTED_PROXIES). Empty, the default, means
+	// no caller-supplied header is believed and the client IP is the address
+	// that opened the connection.
+	// Governing: ADR-0023
+	TrustedProxies []string
 }
 
 // NewRouter assembles the full chi router with all middleware and routes.
@@ -66,7 +72,13 @@ func NewRouter(deps Deps) http.Handler {
 	// Standard middleware
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.RealIP)
+	// Client IP resolution. middleware.RealIP is deprecated: it trusts
+	// True-Client-IP / X-Real-IP / X-Forwarded-For from any caller, so a request
+	// could rewrite its apparent IP in the access log and in the analytics IP
+	// hash. The client IP is now resolved from a configured source onto the
+	// request context, and r.RemoteAddr is left alone.
+	// Governing: ADR-0023
+	r.Use(clientIPMiddleware(deps.TrustedProxies))
 	// Route HEAD requests through GET handlers (chi registers GET-only routes,
 	// so HEAD would otherwise 405). Link checkers, mail scanners, and unfurl
 	// bots probe short links with HEAD; http.Redirect already suppresses the

@@ -172,5 +172,10 @@ server {
 ```
 
 :::note
-Make sure to pass the `X-Real-IP` header so joe-links can log the correct client IP address.
+Pass `X-Forwarded-For`, as above. joe-links only believes it when the connection
+actually arrives from a proxy you listed in `JOE_TRUSTED_PROXIES` (comma-separated
+CIDRs, e.g. `127.0.0.1/32,::1/128` for nginx on the same host), so a caller cannot
+rewrite the IP it is logged and counted under by sending the header itself. With
+no proxy configured, the client IP is the address that opened the connection.
+`X-Real-IP` is never believed. See ADR-0023.
 :::
