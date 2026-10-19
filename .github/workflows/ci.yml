@@ -175,6 +175,264 @@ jobs:
             -target "joe-links (iOS)" -sdk iphonesimulator -configuration Debug \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 
+  safari:
+    name: Safari (TestFlight)
+    # Governing: SPEC-0015 REQ "CI Job Integration", ADR-0015. Runs on release
+    # tags beside `build` and `docker`, and nothing needs this job, so a
+    # signing or upload failure (including the Apple secrets still missing
+    # under #221) can never hold up the binaries or the image.
+    needs: [lint, test]
+    # Prerelease tags (v1.2.3-rc.1) are skipped: the tag-derived build number
+    # ignores the suffix, so an rc upload would collide with the final release
+    # build and App Store Connect would then reject the release itself.
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    runs-on: macos-latest
+    # Two signed archives plus two uploads. Without a ceiling a hung
+    # xcodebuild sits on a macOS runner until the 360-minute job limit.
+    timeout-minutes: 45
+    env:
+      # Optional. SPEC-0015 signs with automatic signing, so xcodebuild can
+      # create the profiles itself via the App Store Connect API key; these are
+      # for teams that manage profiles manually instead.
+      APPLE_PROVISIONING_PROFILE_IOS: ${{ secrets.APPLE_PROVISIONING_PROFILE_IOS }}
+      APPLE_PROVISIONING_PROFILE_MACOS: ${{ secrets.APPLE_PROVISIONING_PROFILE_MACOS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check signing secrets
+        # SPEC-0015 REQ "Code Signing Configuration", scenario "Signing secrets
+        # are missing": fail before the macOS runner burns ten minutes on an
+        # archive it cannot sign, and name every secret that is absent. Values
+        # are mapped into env so the test never expands one into the script or
+        # the log.
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+        run: |
+          missing=()
+          for name in APPLE_CERT_P12 APPLE_CERT_PASSWORD APPLE_TEAM_ID \
+                      APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_API_ISSUER_ID \
+                      APP_STORE_CONNECT_API_KEY_P8; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing Apple signing secret(s): ${missing[*]}. Provision them on the push mirror under #221 (see docs/openspec/specs/safari-extension-testflight/design.md)."
+            exit 1
+          fi
+
+      - name: Derive version and build number from tag
+        id: build_number
+        # SPEC-0015 design: CFBundleShortVersionString comes from the tag, and
+        # the build number is derived from it. Without the marketing override
+        # every release would upload as the 1.0 that is committed in the Xcode
+        # project, and App Store Connect only requires build numbers to be new
+        # within one version, so pinning both keeps uploads accepted.
+        run: |
+          number="$("$GITHUB_WORKSPACE/integrations/apple/testflight-build-number.sh" "$GITHUB_REF_NAME")"
+          echo "value=$number" >> "$GITHUB_OUTPUT"
+          echo "marketing=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "$GITHUB_REF_NAME -> version ${GITHUB_REF_NAME#v} build $number"
+
+      - name: Install signing certificate
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          # 6-hour TTL: archiving both platforms outruns the default auto-lock,
+          # and codesign then blocks on a prompt nobody can answer.
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -P "$APPLE_CERT_PASSWORD" \
+            -k "$keychain" -t cert -f pkcs12
+          # Without this ACL codesign is not trusted to use the key headlessly.
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" \
+            "$(security default-keychain -d user | tr -d '"')"
+          rm -f "$RUNNER_TEMP/signing.p12"
+          echo "KEYCHAIN_PATH=$keychain" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$keychain_password" >> "$GITHUB_ENV"
+
+      - name: Install provisioning profiles
+        # Optional (see the job env block): installs whichever profiles exist.
+        if: env.APPLE_PROVISIONING_PROFILE_IOS != '' || env.APPLE_PROVISIONING_PROFILE_MACOS != ''
+        run: |
+          for platform in IOS MACOS; do
+            var="APPLE_PROVISIONING_PROFILE_$platform"
+            profile="${!var:-}"
+            [ -z "$profile" ] && continue
+            case "$platform" in
+              # .mobileprovision is the iOS profile format and macOS profiles
+              # are read only as .provisionprofile, from the Xcode user-data
+              # directory; the MobileDevice location exists only for iOS.
+              IOS)
+                ext=mobileprovision
+                dests=("$HOME/Library/MobileDevice/Provisioning Profiles" \
+                       "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles") ;;
+              MACOS)
+                ext=provisionprofile
+                dests=("$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles") ;;
+            esac
+            decoded="$RUNNER_TEMP/$platform.$ext"
+            printf '%s' "$profile" | base64 --decode > "$decoded"
+            # Xcode 14 and earlier read the old location, Xcode 15+ the new
+            # one; the runner image decides which is live, so install to both.
+            for dest in "${dests[@]}"; do
+              mkdir -p "$dest"
+              cp "$decoded" "$dest/joe-links-$platform.$ext"
+            done
+            echo "Installed the $platform provisioning profile."
+          done
+
+      - name: Write App Store Connect API key
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+        run: |
+          # xcrun altool wants <keys dir>/AuthKeys/AuthKey_<KEYID>.p8;
+          # xcodebuild takes the file directly via -authenticationKeyPath.
+          mkdir -p "$RUNNER_TEMP/AuthKeys"
+          printf '%s' "$APP_STORE_CONNECT_API_KEY_P8" \
+            > "$RUNNER_TEMP/AuthKeys/AuthKey_$APP_STORE_CONNECT_API_KEY_ID.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKeys/AuthKey_$APP_STORE_CONNECT_API_KEY_ID.p8"
+
+      - name: Archive iOS app
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          xcodebuild archive \
+            -project integrations/apple/joe-links.xcodeproj \
+            -target "joe-links (iOS)" -sdk iphoneos -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/ios.xcarchive" \
+            MARKETING_VERSION="${{ steps.build_number.outputs.marketing }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.build_number.outputs.value }}" \
+            CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKeys/AuthKey_$APP_STORE_CONNECT_API_KEY_ID.p8" \
+            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID"
+
+      - name: Archive macOS app
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          xcodebuild archive \
+            -project integrations/apple/joe-links.xcodeproj \
+            -target "joe-links (macOS)" -configuration Release \
+            -destination "generic/platform=macOS" \
+            -archivePath "$RUNNER_TEMP/macos.xcarchive" \
+            MARKETING_VERSION="${{ steps.build_number.outputs.marketing }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.build_number.outputs.value }}" \
+            CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKeys/AuthKey_$APP_STORE_CONNECT_API_KEY_ID.p8" \
+            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID"
+
+      - name: Export iOS .ipa and macOS .pkg
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          # ExportOptions is written per run: the team ID is a secret, so the
+          # plists cannot be committed. app-store-connect is the method name
+          # from Xcode 15 on (macos-latest ships 16.x); older Xcode calls it
+          # app-store. There is deliberately no -exportFormat flag: it does not
+          # exist (xcodebuild -exportArchive takes only -archivePath,
+          # -exportPath and -exportOptionsPlist, and exits EX_USAGE on an
+          # unknown option). The export format comes from the archive itself:
+          # an iOS archive exports as .ipa, a macOS one as .pkg.
+          for platform in ios macos; do
+            case "$platform" in
+              ios) archive="$RUNNER_TEMP/ios.xcarchive" ;;
+              macos) archive="$RUNNER_TEMP/macos.xcarchive" ;;
+            esac
+            cat > "$RUNNER_TEMP/ExportOptions-$platform.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>destination</key><string>export</string>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          PLIST
+            xcodebuild -exportArchive \
+              -archivePath "$archive" \
+              -exportPath "$RUNNER_TEMP/export-$platform" \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-$platform.plist" \
+              -allowProvisioningUpdates \
+              -authenticationKeyPath "$RUNNER_TEMP/AuthKeys/AuthKey_$APP_STORE_CONNECT_API_KEY_ID.p8" \
+              -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
+              -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID"
+          done
+
+      - name: Upload to TestFlight
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          # SPEC-0015 design chose altool over fastlane deliver: no Ruby
+          # toolchain for a single upload. Apple is retiring it, so if it
+          # disappears from the image the job says so plainly instead of failing
+          # on an unknown flag.
+          if ! xcrun --find altool >/dev/null 2>&1; then
+            echo "::error::xcrun altool is gone from this runner image; move this step to the App Store Connect API (SPEC-0015 design, Risks)."
+            exit 1
+          fi
+          for platform in ios macos; do
+            case "$platform" in
+              ios) type=iphone; dir="$RUNNER_TEMP/export-ios" ;;
+              macos) type=macos; dir="$RUNNER_TEMP/export-macos" ;;
+            esac
+            artifacts=("$dir"/*)
+            if [ ! -e "${artifacts[0]}" ]; then
+              echo "::error::Nothing was exported to $dir, so there is nothing to upload."
+              exit 1
+            fi
+            for artifact in "${artifacts[@]}"; do
+              echo "Uploading $(basename "$artifact") as a $type build."
+              if ! xcrun altool --upload-app --type "$type" -f "$artifact" \
+                --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+                --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID" \
+                --privateKeysPath "$RUNNER_TEMP/AuthKeys"; then
+                echo "::error::TestFlight upload failed for $(basename "$artifact"): App Store Connect rejected the build. expired or invalid API key, or a build number already uploaded."
+                exit 1
+              fi
+            done
+          done
+
+      - name: Remove signing material
+        # The runner is ephemeral, but the keychain, the .p8 and the exported
+        # bundles should not outlive the job that needed them.
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/AuthKeys" "$RUNNER_TEMP/export-ios" "$RUNNER_TEMP/export-macos"
+          rm -f "$RUNNER_TEMP"/*.mobileprovision "$RUNNER_TEMP"/*.provisionprofile \
+            "$RUNNER_TEMP"/ExportOptions-*.plist
+          if [ -n "${KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+
   build:
     name: Build & Release
     needs: [lint, test]
