@@ -40,7 +40,7 @@ type Config struct {
 	// connection. A bare IP is read as a single-address prefix, and an
 	// unparsable entry fails startup rather than being dropped, because a typo
 	// here would silently widen who may rewrite the observed client IP.
-	// Governing: ADR-0022
+	// Governing: ADR-0023
 	TrustedProxies []string
 	LLM             struct {
 		Provider string // "anthropic", "openai", or "openai-compatible"; empty = disabled
@@ -170,7 +170,7 @@ func Load() (*Config, error) {
 	// server, so no X-Forwarded-For value is believed. Entries are normalized
 	// to canonical CIDR form so the router can test the connecting peer
 	// against them directly.
-	// Governing: ADR-0022
+	// Governing: ADR-0023
 	for _, entry := range proxyListEntries(v.Get("trusted_proxies")) {
 		prefix, err := parseProxyPrefix(entry)
 		if err != nil {

@@ -5,7 +5,7 @@ decision-makers: proposed by joestump-agent, awaiting joestump
 extends: [ADR-0016]
 ---
 
-# ADR-0022: Client IP Trust Model
+# ADR-0023: Client IP Trust Model
 
 ## Context and Problem Statement
 

@@ -84,7 +84,7 @@ The `ip_hash` MUST be computed as `SHA-256(clientIP + ":" + dailySalt)` where
 MUST rotate at UTC midnight.
 
 `clientIP` is the address the server attributes the request to, resolved by the
-trust model of ADR-0022: the address that opened the connection, or — only when
+trust model of ADR-0023: the address that opened the connection, or — only when
 that peer is a configured trusted proxy — the client's address taken from
 `X-Forwarded-For`. A value supplied by an untrusted peer MUST NOT be used.
 

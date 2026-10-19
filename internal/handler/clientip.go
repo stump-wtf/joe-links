@@ -9,7 +9,7 @@
 // middleware.GetClientIP. r.RemoteAddr is never mutated, so no code path can
 // inherit a caller-supplied value by accident.
 //
-// Governing: ADR-0022
+// Governing: ADR-0023
 package handler
 
 import (
@@ -57,7 +57,7 @@ func clientIPMiddleware(trustedProxies []string) func(http.Handler) http.Handler
 // nothing. It never reads a header itself, so a caller cannot choose the IP
 // this request is recorded under.
 //
-// Governing: ADR-0022
+// Governing: ADR-0023
 func clientIP(r *http.Request) string {
 	if ip := middleware.GetClientIP(r.Context()); ip != "" {
 		return ip

@@ -49,7 +49,7 @@ type Deps struct {
 	// resolving the client IP (JOE_TRUSTED_PROXIES). Empty, the default, means
 	// no caller-supplied header is believed and the client IP is the address
 	// that opened the connection.
-	// Governing: ADR-0022
+	// Governing: ADR-0023
 	TrustedProxies []string
 }
 
@@ -77,7 +77,7 @@ func NewRouter(deps Deps) http.Handler {
 	// could rewrite its apparent IP in the access log and in the analytics IP
 	// hash. The client IP is now resolved from a configured source onto the
 	// request context, and r.RemoteAddr is left alone.
-	// Governing: ADR-0022
+	// Governing: ADR-0023
 	r.Use(clientIPMiddleware(deps.TrustedProxies))
 	// Route HEAD requests through GET handlers (chi registers GET-only routes,
 	// so HEAD would otherwise 405). Link checkers, mail scanners, and unfurl

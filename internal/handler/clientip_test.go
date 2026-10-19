@@ -4,7 +4,7 @@
 // real NewRouter and read back the recorded click event, so the assertions
 // cover the whole middleware stack rather than a helper in isolation.
 //
-// Governing: ADR-0022
+// Governing: ADR-0023
 package handler
 
 import (

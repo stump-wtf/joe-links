@@ -188,7 +188,7 @@ func TestClickRetentionConfig_BelowStalenessFloorFailsStartup(t *testing.T) {
 // normalized to canonical CIDRs for the router's peer check, and a typo fails
 // startup instead of quietly widening who can rewrite the observed client IP.
 //
-// Governing: ADR-0022
+// Governing: ADR-0023
 
 func TestTrustedProxies_DefaultIsEmpty(t *testing.T) {
 	setRequiredEnv(t)
