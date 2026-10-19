@@ -8,6 +8,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -230,6 +232,35 @@ func TestTrustedProxies_RejectsUnparsableEntries(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "JOE_TRUSTED_PROXIES") {
 			t.Errorf("error must name the setting; got %q", err)
+		}
+	}
+}
+
+// The YAML form of the setting arrives as a list rather than the env form's
+// one comma-separated string, so the list branch of the flattener needs its
+// own proof that entries are normalized. Load reads joe-links.yaml from the
+// working directory only, so the test runs in a temp dir holding one.
+//
+// Governing: ADR-0023
+func TestTrustedProxies_YAMLListNormalizedToCIDRs(t *testing.T) {
+	setRequiredEnv(t)
+	dir := t.TempDir()
+	cfgYAML := "trusted_proxies:\n  - 127.0.0.1\n  - 10.0.0.0/8\n"
+	if err := os.WriteFile(filepath.Join(dir, "joe-links.yaml"), []byte(cfgYAML), 0o600); err != nil {
+		t.Fatalf("write joe-links.yaml: %v", err)
+	}
+	t.Chdir(dir)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"127.0.0.1/32", "10.0.0.0/8"}
+	if len(cfg.TrustedProxies) != len(want) {
+		t.Fatalf("TrustedProxies = %v, want %v", cfg.TrustedProxies, want)
+	}
+	for i, w := range want {
+		if cfg.TrustedProxies[i] != w {
+			t.Errorf("TrustedProxies[%d] = %q, want %q", i, cfg.TrustedProxies[i], w)
 		}
 	}
 }
