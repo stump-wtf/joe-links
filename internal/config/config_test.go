@@ -183,3 +183,53 @@ func TestClickRetentionConfig_BelowStalenessFloorFailsStartup(t *testing.T) {
 		t.Errorf("ClickRetentionDays = %d, want 90", cfg.ClickRetentionDays)
 	}
 }
+
+// Client IP trust: the default believes no caller-supplied header, entries are
+// normalized to canonical CIDRs for the router's peer check, and a typo fails
+// startup instead of quietly widening who can rewrite the observed client IP.
+//
+// Governing: ADR-0022
+
+func TestTrustedProxies_DefaultIsEmpty(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Errorf("TrustedProxies = %v, want empty: with no proxy configured no caller-supplied header may be believed", cfg.TrustedProxies)
+	}
+}
+
+func TestTrustedProxies_NormalizedToCIDRs(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("JOE_TRUSTED_PROXIES", "127.0.0.1, 10.0.0.0/8, ::1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"127.0.0.1/32", "10.0.0.0/8", "::1/128"}
+	if len(cfg.TrustedProxies) != len(want) {
+		t.Fatalf("TrustedProxies = %v, want %v", cfg.TrustedProxies, want)
+	}
+	for i, w := range want {
+		if cfg.TrustedProxies[i] != w {
+			t.Errorf("TrustedProxies[%d] = %q, want %q", i, cfg.TrustedProxies[i], w)
+		}
+	}
+}
+
+func TestTrustedProxies_RejectsUnparsableEntries(t *testing.T) {
+	setRequiredEnv(t)
+	for _, v := range []string{"localhost", "10.0.0.0/33", "10.0.0.0/8, nope"} {
+		t.Setenv("JOE_TRUSTED_PROXIES", v)
+		_, err := Load()
+		if err == nil {
+			t.Errorf("Load accepted JOE_TRUSTED_PROXIES=%q", v)
+			continue
+		}
+		if !strings.Contains(err.Error(), "JOE_TRUSTED_PROXIES") {
+			t.Errorf("error must name the setting; got %q", err)
+		}
+	}
+}

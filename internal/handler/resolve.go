@@ -10,7 +10,6 @@ package handler
 
 import (
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -455,7 +454,7 @@ func (h *ResolveHandler) redirect(w http.ResponseWriter, r *http.Request, linkID
 		case h.clickCh <- store.ClickEvent{
 			LinkID:    linkID,
 			UserID:    userID,
-			IPHash:    store.HashIP(realIP(r)),
+			IPHash:    store.HashIP(clientIP(r)),
 			UserAgent: ua,
 			Referrer:  ref,
 		}:
@@ -463,16 +462,6 @@ func (h *ResolveHandler) redirect(w http.ResponseWriter, r *http.Request, linkID
 			log.Printf("analytics: click channel full, dropping event for link %s", linkID)
 		}
 	}
-}
-
-// realIP extracts the client IP from r.RemoteAddr (port stripped).
-// Chi's middleware.RealIP already rewrites r.RemoteAddr from X-Real-IP / X-Forwarded-For.
-func realIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 // Did-you-mean bounds, enforced server-side (SPEC-0019): only candidates

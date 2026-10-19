@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,15 @@ type Config struct {
 	ShortKeyword    string   // override the short keyword prefix (default: first label of HTTP host)
 	SessionLifetime time.Duration
 	InsecureCookies bool
+	// TrustedProxies lists the CIDRs whose X-Forwarded-For value may be
+	// believed when resolving the client IP (JOE_TRUSTED_PROXIES, or a
+	// trusted_proxies list in joe-links.yaml). Empty, the default, believes no
+	// caller-supplied header and keys on the address that opened the
+	// connection. A bare IP is read as a single-address prefix, and an
+	// unparsable entry fails startup rather than being dropped, because a typo
+	// here would silently widen who may rewrite the observed client IP.
+	// Governing: ADR-0022
+	TrustedProxies []string
 	LLM             struct {
 		Provider string // "anthropic", "openai", or "openai-compatible"; empty = disabled
 		APIKey   string
@@ -156,6 +166,19 @@ func Load() (*Config, error) {
 		cfg.ClickRetentionDays = days
 	}
 
+	// Client IP trust. Unset means nothing sits between the client and this
+	// server, so no X-Forwarded-For value is believed. Entries are normalized
+	// to canonical CIDR form so the router can test the connecting peer
+	// against them directly.
+	// Governing: ADR-0022
+	for _, entry := range proxyListEntries(v.Get("trusted_proxies")) {
+		prefix, err := parseProxyPrefix(entry)
+		if err != nil {
+			return nil, fmt.Errorf("invalid JOE_TRUSTED_PROXIES entry %q: must be a CIDR (127.0.0.1/32) or a bare IP (127.0.0.1)", entry)
+		}
+		cfg.TrustedProxies = append(cfg.TrustedProxies, prefix.String())
+	}
+
 	if cfg.DB.Driver == "" {
 		return nil, fmt.Errorf("JOE_DB_DRIVER is required (sqlite3, mysql, postgres)")
 	}
@@ -176,4 +199,49 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// proxyListEntries flattens the trusted_proxies setting into entries:
+// JOE_TRUSTED_PROXIES arrives as one comma-separated string, a YAML
+// trusted_proxies list arrives as a slice.
+func proxyListEntries(raw any) []string {
+	var out []string
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	switch v := raw.(type) {
+	case string:
+		for _, s := range strings.Split(v, ",") {
+			add(s)
+		}
+	case []string:
+		for _, s := range v {
+			add(s)
+		}
+	case []any:
+		for _, e := range v {
+			add(fmt.Sprint(e))
+		}
+	}
+	return out
+}
+
+// parseProxyPrefix reads a CIDR, or a bare IPv4/IPv6 address as a
+// single-address prefix, and returns it in canonical form.
+func parseProxyPrefix(entry string) (netip.Prefix, error) {
+	if p, err := netip.ParsePrefix(entry); err == nil {
+		return p, nil
+	}
+	addr, err := netip.ParseAddr(entry)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	addr = addr.Unmap()
+	bits := 128
+	if addr.Is4() {
+		bits = 32
+	}
+	return netip.PrefixFrom(addr, bits), nil
 }
