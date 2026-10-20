@@ -1,4 +1,5 @@
 import React from 'react';
+import type { JSX } from 'react';
 import clsx from 'clsx';
 
 export type SeverityType = 'critical' | 'high' | 'medium' | 'low' | 'info' | 'unknown';
