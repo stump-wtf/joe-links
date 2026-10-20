@@ -145,7 +145,7 @@ The application UI MUST use Tailwind CSS for utility-class styling and DaisyUI a
 
 #### Scenario: Theming
 
-- **WHEN** a DaisyUI theme is configured in `tailwind.config.js`
+- **WHEN** a DaisyUI theme is configured in `static/css/input.css`
 - **THEN** all rendered pages MUST apply that theme consistently
 
 ---

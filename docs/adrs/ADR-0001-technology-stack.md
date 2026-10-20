@@ -39,7 +39,7 @@ Chosen option: **Go + HTMX + DaisyUI/Tailwind**, because it delivers dynamic UIs
 
 ### Confirmation
 
-Confirmed by: presence of `go.mod`, Go template files (`.html`), Tailwind config (`tailwind.config.js`), and `htmx` script inclusion in base layout. No `package.json` with React or Vue dependencies should exist.
+Confirmed by: presence of `go.mod`, Go template files (`.html`), Tailwind CSS entry (`static/css/input.css` with `@tailwindcss/cli`), and `htmx` script inclusion in base layout. No `package.json` with React or Vue dependencies should exist.
 
 ## Pros and Cons of the Options
 

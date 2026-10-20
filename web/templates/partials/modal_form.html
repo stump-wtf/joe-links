@@ -27,7 +27,7 @@
                     <span class="label-text">Slug <span class="text-error">*</span></span>
                     <span class="label-text-alt text-base-content/50">e.g. jira, standup</span>
                 </label>
-                <label class="input input-bordered flex items-center gap-2">
+                <label class="input flex items-center gap-2">
                     <span class="text-base-content/50 font-mono">go/</span>
                     <input
                         type="text"
@@ -55,7 +55,7 @@
                     type="url"
                     name="url"
                     id="modal-url-input"
-                    class="input input-bordered"
+                    class="input"
                     placeholder="https://jira.example.com/browse/$ticket"
                     required
                     value="{{.Form.URL}}"
@@ -71,7 +71,7 @@
                 <input
                     type="text"
                     name="title"
-                    class="input input-bordered"
+                    class="input"
                     placeholder="Short descriptive title"
                     value="{{.Form.Title}}"
                 >
@@ -84,7 +84,7 @@
                 <input
                     type="text"
                     name="description"
-                    class="input input-bordered"
+                    class="input"
                     placeholder="What does this link go to?"
                     value="{{.Form.Description}}"
                 >
@@ -93,7 +93,7 @@
             <!-- Governing: SPEC-0010 REQ "Visibility Selector in Link Forms" -->
             <div class="form-control mb-4">
                 <label class="label"><span class="label-text">Visibility</span></label>
-                <select name="visibility" class="select select-bordered">
+                <select name="visibility" class="select">
                     <option value="public" {{if eq .Form.Visibility "public"}}selected{{end}}>Public — anyone can access</option>
                     <option value="private" {{if eq .Form.Visibility "private"}}selected{{end}}>Private — hidden from browsing</option>
                     <option value="secure" {{if eq .Form.Visibility "secure"}}selected{{end}}>Secure — requires login + grant</option>
@@ -110,7 +110,7 @@
                     type="datetime-local"
                     name="expires_at"
                     step="1"
-                    class="input input-bordered"
+                    class="input"
                     value="{{.Form.ExpiresAt}}"
                 >
             </div>
@@ -133,7 +133,7 @@
                         type="text"
                         name="tags"
                         id="tags-input"
-                        class="input input-bordered w-full"
+                        class="input w-full"
                         placeholder="engineering, tools, jira"
                         value="{{.Form.Tags}}"
                         autocomplete="off"
@@ -212,7 +212,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <form hx-put="/dashboard/links/{{.Link.ID}}" hx-target="#modal" hx-swap="innerHTML">
             <div class="form-control mb-4">
                 <label class="label"><span class="label-text">Slug</span></label>
-                <label class="input input-bordered flex items-center gap-2 opacity-60">
+                <label class="input flex items-center gap-2 opacity-60">
                     <span class="text-base-content/50 font-mono">go/</span>
                     <input type="text" class="grow font-mono" disabled value="{{.Link.Slug}}">
                 </label>
@@ -223,7 +223,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="label-text">Destination URL <span class="text-error">*</span></span>
                     <span class="label-text-alt text-base-content/50">use <code class="font-mono">$var</code> for variable parts</span>
                 </label>
-                <input type="url" name="url" id="modal-url-input" class="input input-bordered"
+                <input type="url" name="url" id="modal-url-input" class="input"
                     required value="{{if .Form.URL}}{{.Form.URL}}{{else}}{{.Link.URL}}{{end}}"
                     oninput="modalUpdateVarHint(this)">
                 <div id="modal-url-var-hint" class="mt-1 min-h-[1.25rem]"></div>
@@ -231,20 +231,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
             <div class="form-control mb-4">
                 <label class="label"><span class="label-text">Title</span></label>
-                <input type="text" name="title" class="input input-bordered"
+                <input type="text" name="title" class="input"
                     value="{{if .Form.Title}}{{.Form.Title}}{{else}}{{.Link.Title}}{{end}}">
             </div>
 
             <div class="form-control mb-4">
                 <label class="label"><span class="label-text">Description</span></label>
-                <input type="text" name="description" class="input input-bordered"
+                <input type="text" name="description" class="input"
                     value="{{if .Form.Description}}{{.Form.Description}}{{else}}{{.Link.Description}}{{end}}">
             </div>
 
             <!-- Governing: SPEC-0010 REQ "Visibility Selector in Link Forms" -->
             <div class="form-control mb-4">
                 <label class="label"><span class="label-text">Visibility</span></label>
-                <select name="visibility" class="select select-bordered">
+                <select name="visibility" class="select">
                     <option value="public" {{if eq .Form.Visibility "public"}}selected{{end}}>Public — anyone can access</option>
                     <option value="private" {{if eq .Form.Visibility "private"}}selected{{end}}>Private — hidden from browsing</option>
                     <option value="secure" {{if eq .Form.Visibility "secure"}}selected{{end}}>Secure — requires login + grant</option>
@@ -261,7 +261,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     type="datetime-local"
                     name="expires_at"
                     step="1"
-                    class="input input-bordered"
+                    class="input"
                     value="{{.Form.ExpiresAt}}"
                 >
             </div>
@@ -279,7 +279,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="label-text">Tags</span>
                     <span class="label-text-alt text-base-content/50">comma-separated</span>
                 </label>
-                <input type="text" name="tags" class="input input-bordered"
+                <input type="text" name="tags" class="input"
                     placeholder="engineering, tools"
                     value="{{.Form.Tags}}">
             </div>

@@ -10,7 +10,7 @@
     <input
         type="search"
         name="q"
-        class="input input-bordered flex-1"
+        class="input flex-1"
         placeholder="Search links by slug, URL, or description..."
         value="{{.Query}}"
         hx-get="/dashboard"
@@ -25,7 +25,7 @@
 <!-- Governing: SPEC-0020 REQ "Staleness Views" — stale / never-clicked filters
      over the viewer's own dashboard scope, computed from link_clicks at query
      time in the store layer; archived links are out of scope. -->
-<div class="tabs tabs-boxed mb-6 w-fit">
+<div class="tabs tabs-box mb-6 w-fit">
     <a class="tab {{if not .Filter}}tab-active{{end}}"
        hx-get="/dashboard"
        hx-target="#link-list"

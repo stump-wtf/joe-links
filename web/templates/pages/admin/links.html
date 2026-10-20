@@ -16,7 +16,7 @@
 <!-- Governing: SPEC-0011 REQ "Admin Links Screen" — HTMX search with debounce -->
 <div class="mb-4">
     <input type="text" name="q" placeholder="Search by slug, URL, title, or owner..."
-           class="input input-bordered w-full max-w-md"
+           class="input w-full max-w-md"
            value="{{.Query}}"
            hx-get="/admin/links"
            hx-trigger="keyup changed delay:300ms"
@@ -46,19 +46,19 @@
     </td>
     <td>
         <input type="text" name="url" value="{{$l.URL}}" form="edit-link-{{$l.ID}}"
-               class="input input-bordered input-xs w-full" required />
+               class="input input-xs w-full" required />
     </td>
     <td>
         <input type="text" name="title" value="{{$l.Title}}" form="edit-link-{{$l.ID}}"
-               class="input input-bordered input-xs w-full" />
+               class="input input-xs w-full" />
     </td>
     <td class="text-sm text-base-content/70">{{$l.Owners}}</td>
     <td>
         <input type="text" name="description" value="{{$l.Description}}" form="edit-link-{{$l.ID}}"
-               class="input input-bordered input-xs w-full" placeholder="Description" />
+               class="input input-xs w-full" placeholder="Description" />
     </td>
     <td>
-        <select name="visibility" form="edit-link-{{$l.ID}}" class="select select-bordered select-xs w-full">
+        <select name="visibility" form="edit-link-{{$l.ID}}" class="select select-xs w-full">
             <option value="public" {{if eq $l.Visibility "public"}}selected{{end}}>public</option>
             <option value="private" {{if eq $l.Visibility "private"}}selected{{end}}>private</option>
             <option value="secure" {{if eq $l.Visibility "secure"}}selected{{end}}>secure</option>

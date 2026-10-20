@@ -14,7 +14,7 @@
                 <tr>
                     <td>
                         <div class="flex items-center gap-2">
-                            <div class="avatar placeholder">
+                            <div class="avatar avatar-placeholder">
                                 <div class="bg-neutral text-neutral-content rounded-full w-6">
                                     <span class="text-xs">{{slice .DisplayName 0 1}}</span>
                                 </div>
@@ -45,7 +45,7 @@
           hx-target="#owners-section"
           hx-swap="outerHTML"
           class="flex gap-2">
-        <input type="email" name="email" class="input input-bordered input-sm flex-1"
+        <input type="email" name="email" class="input input-sm flex-1"
                placeholder="Add co-owner by email" required>
         <button type="submit" class="btn btn-sm btn-primary">Add</button>
     </form>

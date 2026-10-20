@@ -13,11 +13,11 @@
 <form hx-post="/admin/keywords" hx-target="#keyword-list" hx-swap="outerHTML" class="card bg-base-200 p-4 mb-6">
     <div class="flex gap-3 flex-wrap">
         <input type="text" name="keyword" placeholder="keyword (e.g. jira)"
-               class="input input-bordered w-32 font-mono" required />
+               class="input w-32 font-mono" required />
         <input type="text" name="url_template" placeholder="https://example.com/search?q={slug}"
-               class="input input-bordered flex-1" required />
+               class="input flex-1" required />
         <input type="text" name="description" placeholder="Description (optional)"
-               class="input input-bordered w-48" />
+               class="input w-48" />
         <button type="submit" class="btn btn-primary">Add</button>
     </div>
     <p class="text-xs text-base-content/60 mt-1">URL template must contain <code>{slug}</code></p>
