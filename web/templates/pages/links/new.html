@@ -26,7 +26,7 @@
                                 <span class="label-text">Slug <span class="text-error">*</span></span>
                                 <span class="label-text-alt text-base-content/50">e.g. jira, standup</span>
                             </label>
-                            <label class="input input-bordered flex items-center gap-2">
+                            <label class="input flex items-center gap-2">
                                 <span class="text-base-content/50 font-mono">go/</span>
                                 <input
                                     type="text"
@@ -55,7 +55,7 @@
                                 type="url"
                                 name="url"
                                 id="url-input"
-                                class="input input-bordered"
+                                class="input"
                                 placeholder="https://example.com/very/long/url"
                                 required
                                 value="{{.Form.URL}}"
@@ -70,7 +70,7 @@
                             <input
                                 type="text"
                                 name="title"
-                                class="input input-bordered"
+                                class="input"
                                 placeholder="Short descriptive title"
                                 value="{{.Form.Title}}"
                             >
@@ -83,7 +83,7 @@
                             <input
                                 type="text"
                                 name="description"
-                                class="input input-bordered"
+                                class="input"
                                 placeholder="What does this link go to?"
                                 value="{{.Form.Description}}"
                             >
@@ -92,7 +92,7 @@
                         <!-- Governing: SPEC-0010 REQ "Visibility Selector in Link Forms" -->
                         <div class="form-control mb-4">
                             <label class="label"><span class="label-text">Visibility</span></label>
-                            <select name="visibility" class="select select-bordered">
+                            <select name="visibility" class="select">
                                 <option value="public" {{if eq .Form.Visibility "public"}}selected{{end}}>Public — anyone can access</option>
                                 <option value="private" {{if eq .Form.Visibility "private"}}selected{{end}}>Private — hidden from browsing</option>
                                 <option value="secure" {{if eq .Form.Visibility "secure"}}selected{{end}}>Secure — requires login + grant</option>
@@ -109,7 +109,7 @@
                                 type="datetime-local"
                                 name="expires_at"
                                 step="1"
-                                class="input input-bordered"
+                                class="input"
                                 value="{{.Form.ExpiresAt}}"
                             >
                         </div>
@@ -133,7 +133,7 @@
                                     type="text"
                                     name="tags"
                                     id="tags-input"
-                                    class="input input-bordered w-full"
+                                    class="input w-full"
                                     placeholder="engineering, tools, jira"
                                     value="{{.Form.Tags}}"
                                     autocomplete="off"

@@ -238,10 +238,10 @@ joe-links/
 │       └── 404.html
 ├── static/
 │   ├── css/
+│   │   ├── input.css           # Tailwind + daisyUI CSS-first config (themes)
 │   │   └── app.css              # Compiled Tailwind/DaisyUI output
 │   └── js/
 │       └── htmx.min.js
-├── tailwind.config.js
 ├── package.json                 # Tailwind + DaisyUI dev deps only
 ├── Makefile
 └── go.mod

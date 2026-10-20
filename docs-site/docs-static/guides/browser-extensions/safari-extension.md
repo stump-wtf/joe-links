@@ -134,86 +134,51 @@ Apple typically reviews Safari extensions within 1–3 business days.
 
 ## Automating with CI (GitHub Actions)
 
-You can automate the archive and notarization step in GitHub Actions on tag pushes. This requires storing your Apple credentials as repository secrets.
+`.github/workflows/ci.yml` has a `safari` job that does this automatically on
+release tags, once `lint` and `test` pass, in parallel with `build` and
+`docker`. It installs the distribution certificate from `APPLE_CERT_P12`,
+archives the iOS and macOS targets with the version and build number taken from
+the tag (`v0.2.21` uploads version `0.2.21`, build `221`), exports the iOS
+`.ipa` and the macOS `.pkg`, and uploads both to TestFlight with the App Store
+Connect API key (SPEC-0015, issue #134). No job depends on it, so a signing or
+upload failure never holds up the binaries or the Docker image.
+
+Prerelease tags (`v1.2.3-rc.1`) are skipped on purpose: the build number is
+made from the digits in the tag, so an rc upload would collide with the release
+upload, and App Store Connect rejects a duplicate build number.
+
+A missing secret fails the job at its first step, which names every secret that
+is absent before the runner spends ten minutes on an archive it cannot sign.
 
 ### Required secrets
 
-| Secret | Value |
-|--------|-------|
-| `APPLE_CERTIFICATE_BASE64` | Base64-encoded `.p12` exported from Keychain |
-| `APPLE_CERTIFICATE_PASSWORD` | Password for the `.p12` |
-| `APPLE_TEAM_ID` | Your 10-character Team ID from developer.apple.com |
-| `APPLE_ID` | Your Apple ID email |
-| `APPLE_APP_PASSWORD` | App-specific password from [appleid.apple.com](https://appleid.apple.com) |
+| Secret | Required | Value |
+|--------|----------|-------|
+| `APPLE_CERT_P12` | yes | Base64-encoded distribution `.p12` exported from Keychain |
+| `APPLE_CERT_PASSWORD` | yes | Password for that `.p12` |
+| `APPLE_TEAM_ID` | yes | 10-character Team ID from developer.apple.com |
+| `APP_STORE_CONNECT_API_KEY_ID` | yes | Key ID from App Store Connect -> Users and Access -> Integrations -> API |
+| `APP_STORE_CONNECT_API_ISSUER_ID` | yes | Issuer ID shown on that same page |
+| `APP_STORE_CONNECT_API_KEY_P8` | yes | Contents of the downloaded `.p8` private key |
+| `APPLE_PROVISIONING_PROFILE_IOS` | optional | Base64-encoded iOS distribution profile |
+| `APPLE_PROVISIONING_PROFILE_MACOS` | optional | Base64-encoded macOS distribution profile |
 
-Export your Developer ID certificate from Keychain Access:
+The provisioning profiles are optional because the project signs automatically:
+`xcodebuild` creates the profiles it needs through the App Store Connect API
+key. Set them only if you prefer to manage profiles yourself.
+
+Export the distribution certificate from Keychain Access:
 
 ```bash
-# After exporting MyDeveloperID.p12 from Keychain Access:
-base64 -i MyDeveloperID.p12 | pbcopy   # copies to clipboard → paste into GitHub secret
+# After exporting MyDistribution.p12 from Keychain Access:
+base64 -i MyDistribution.p12 | pbcopy   # copies to clipboard -> paste into the GitHub secret
 ```
 
-### Add a `safari` job to ci.yml
-
-```yaml
-safari:
-  name: Safari Extension
-  needs: [lint, test]
-  if: startsWith(github.ref, 'refs/tags/')
-  runs-on: macos-latest
-  steps:
-    - uses: actions/checkout@v4
-
-    - name: Import signing certificate
-      env:
-        CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-        CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      run: |
-        KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
-        security create-keychain -p "" $KEYCHAIN_PATH
-        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-        security unlock-keychain -p "" $KEYCHAIN_PATH
-        echo "$CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/cert.p12
-        security import $RUNNER_TEMP/cert.p12 -P "$CERTIFICATE_PASSWORD" \
-          -k $KEYCHAIN_PATH -T /usr/bin/codesign
-        security list-keychain -d user -s $KEYCHAIN_PATH
-
-    - name: Build Safari extension
-      run: |
-        cd integrations/apple
-        xcodebuild archive \
-          -scheme "joe-links (macOS)" \
-          -archivePath $RUNNER_TEMP/joe-links.xcarchive \
-          CODE_SIGN_IDENTITY="Developer ID Application" \
-          DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }}
-
-    - name: Notarize and export
-      env:
-        APPLE_ID: ${{ secrets.APPLE_ID }}
-        APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      run: |
-        xcodebuild -exportArchive \
-          -archivePath $RUNNER_TEMP/joe-links.xcarchive \
-          -exportPath dist/safari \
-          -exportOptionsPlist integrations/apple/ExportOptions.plist
-        # Notarize
-        xcrun notarytool submit dist/safari/joe-links.dmg \
-          --apple-id "$APPLE_ID" \
-          --password "$APPLE_APP_PASSWORD" \
-          --team-id "$APPLE_TEAM_ID" \
-          --wait
-        xcrun stapler staple dist/safari/joe-links.dmg
-
-    - name: Upload to release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: dist/safari/joe-links.dmg
-```
-
-:::note
-The `ExportOptions.plist` file controls distribution method (Developer ID vs App Store). Create it once in Xcode during a manual export — Xcode saves it to the export folder — then commit it to the repo.
-:::
+The `ExportOptions.plist` files are written by the job at run time, because the
+team ID lives in a secret; there is nothing to commit. Uploads run through
+`xcrun altool`, which Apple is retiring in favour of the App Store Connect API,
+so the step fails with a note pointing at that migration if a future macOS
+runner image drops it.
 
 ---
 
