@@ -1,5 +1,5 @@
 # Stage 1 — CSS builder
-FROM node:20-alpine AS css-builder
+FROM node:26-alpine AS css-builder
 WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci
