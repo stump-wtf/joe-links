@@ -1,6 +1,6 @@
 services:
   dex:
-    image: dexidp/dex:v2.46.0
+    image: dexidp/dex:v2.46.1
     ports:
       - "5556:5556"
     volumes:

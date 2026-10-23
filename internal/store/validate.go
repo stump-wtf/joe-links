@@ -223,8 +223,8 @@ func ValidateLinkURL(rawURL string) error {
 // ValidateTagName checks a single tag display name (after trimming, matching
 // how the tag store persists names): safe charset, must start alphanumeric,
 // bounded length. Names that would derive an empty slug (e.g. all-symbol or
-// non-ASCII names) are rejected here for free, so no unroutable slug='' tag
-// row can be created (issue #251).
+// non-ASCII names) are rejected here for free, so no tag row with an
+// unroutable empty slug can be created (issue #251).
 // Governing: SPEC-0002 REQ "Tags Table" — every stored name derives a non-empty slug
 func ValidateTagName(name string) error {
 	name = strings.TrimSpace(name)
