@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,9 +57,16 @@ func (s *KeywordStore) GetByID(ctx context.Context, id string) (*Keyword, error)
 }
 
 // GetByKeyword returns the keyword matching the given keyword string, or ErrNotFound.
+// The candidate is case-folded before comparison: keyword intake accepts only
+// lowercase names, so the stored corpus is canonical and folding the argument
+// is enough - no collation or schema change - and lookup stops disagreeing
+// across drivers (MySQL's default collation already folded, sqlite3 and
+// PostgreSQL did not). Host lookup folds too, since DNS hostnames are
+// case-insensitive.
+// Governing: SPEC-0019 REQ "Case-Folded Keyword Matching", ADR-0011, ADR-0024
 func (s *KeywordStore) GetByKeyword(ctx context.Context, keyword string) (*Keyword, error) {
 	var k Keyword
-	err := s.db.GetContext(ctx, &k, s.q(`SELECT * FROM keywords WHERE keyword = ?`), keyword)
+	err := s.db.GetContext(ctx, &k, s.q(`SELECT * FROM keywords WHERE keyword = ?`), strings.ToLower(keyword))
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
