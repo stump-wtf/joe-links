@@ -62,6 +62,29 @@ joe-links serve    # run migrations + start HTTP server
 joe-links migrate  # run migrations and exit
 ```
 
+## Requesting Review (Gitea)
+
+The canonical copy of this repo is `stump.wtf/joe-links` on https://gitea.stump.rocks
+(Gitea API 28.x). Review requests are routed as:
+
+```
+POST /api/v1/repos/{owner}/{repo}/pulls/{index}/requested_reviewers
+Content-Type: application/json
+
+{"reviewers":["joestump"]}
+```
+
+Do **not** use `POST .../pulls/{index}/reviewers?reviewers=<name>`: that path is not a
+route on this build, so it answers 405 with an empty body — and `tea api` exits 0 for any
+HTTP status, so the request looks like it worked while no reviewer was attached (#336).
+`tea pulls create` has no reviewers flag either. Use the helper, which posts the form
+above and then re-reads the pull request and fails if the reviewer is missing:
+
+```bash
+scripts/gitea-request-review.sh stump.wtf/joe-links 336 joestump
+scripts/gitea-request-review.sh --dry-run stump.wtf/joe-links 336 joestump   # show the request
+```
+
 ## Release Process
 
 Always use `gh release` when tagging releases — never push a bare tag without release notes.
