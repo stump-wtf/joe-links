@@ -11,7 +11,8 @@ requires: [SPEC-0002, SPEC-0004, SPEC-0005, SPEC-0006, SPEC-0007, SPEC-0008, SPE
 
 This specification defines the search and discovery layer for joe-links (epic #218): case-insensitive slug resolution, a lightweight autocomplete suggest endpoint at `GET /api/v1/links/suggest`, "Did you mean go/…?" suggestions on the 404 page, omnibox integration in the browser extension, and optional slug-normalization forgiveness. Per ADR-0019, all matching uses portable SQL (`LIKE` only — no trigram or FTS extensions, per ADR-0002) plus in-Go ranking and bounded Levenshtein distance, and **every discovery surface is visibility-filtered in the shared store layer** so that suggestions can never reveal a slug the viewer could not already discover under SPEC-0010.
 
-See ADR-0019 (Search & Discovery), ADR-0024 (keyword matching case-folding), SPEC-0004 (Application Views and Routing — the 404 page this extends), SPEC-0005 (REST API Layer), SPEC-0006 (PAT bearer auth), SPEC-0008 (Browser Extension), SPEC-0009 (URL Variable Substitution), SPEC-0010 (Link Visibility Modes), SPEC-0017 (the unrelated `POST /api/v1/links/suggest` LLM metadata operation sharing the path).
+See ADR-0019 (Search & Discovery), ADR-0024 (keyword matching case-folding), SPEC-0004 (Application Views and Routing — the 404 page this extends), SPEC-0005 (REST API Layer), SPEC-0006 (PAT bearer auth), SPEC-0008 (Browser Extension), SPEC-0009 (URL Variable Substitution), SPEC-0010 (Link Visibility Modes), SPEC-0011 (Admin
+Keywords Screen — the intake validation that keeps the keyword corpus canonical), SPEC-0017 (the unrelated `POST /api/v1/links/suggest` LLM metadata operation sharing the path).
 
 ---
 
