@@ -42,6 +42,6 @@ A Safari Web Extension Xcode project is already checked in at `integrations/appl
 3. Build and run the iOS or macOS scheme (⌘R)
 4. Enable the extension in Safari > Settings > Extensions (on macOS you may need **Develop → Allow Unsigned Extensions** first)
 
-After a code change here, just rebuild in Xcode — no conversion or re-import needed.
+After a code change here, just rebuild in Xcode: no conversion or re-import needed. A **new** file is the exception, because the build copies what the project lists. Add it to the Resources of both extension targets, or `go test ./internal/packaging` fails the pull request.
 
 See SPEC-0008 REQ "Cross-Browser Packaging" and ADR-0012 for architectural context.
