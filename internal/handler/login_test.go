@@ -130,6 +130,23 @@ func TestRouter_OIDCModeRefusesPasswordSignIn(t *testing.T) {
 	}
 }
 
+// In local mode the OIDC callback must refuse rather than run: no provider is
+// wired, and a fully crafted state pair used to reach the nil provider and
+// panic (recovered as a 500).
+func TestRouter_LocalModeRefusesOIDCCallback(t *testing.T) {
+	router := newLoginTestRouter(t, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/callback?state=s&code=c", nil)
+	req.AddCookie(&http.Cookie{Name: "__auth_state", Value: "s"})
+	req.AddCookie(&http.Cookie{Name: "__auth_pkce", Value: "v"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
 func firstBytes(s string) string {
 	if len(s) > 200 {
 		return s[:200]

@@ -167,6 +167,13 @@ func (h *Handlers) renderLoginPage(w http.ResponseWriter, r *http.Request, retur
 
 // Callback handles the OIDC provider redirect after authentication.
 func (h *Handlers) Callback(w http.ResponseWriter, r *http.Request) {
+	// Local mode has no provider, so the OIDC flow cannot start and a
+	// callback request has nothing to exchange — refuse instead of panicking.
+	if h.provider == nil {
+		http.Error(w, "OIDC sign-in is not available: this instance authenticates with a local admin", http.StatusNotFound)
+		return
+	}
+
 	// Validate state
 	stateCookie, err := r.Cookie(cookieState)
 	if err != nil || stateCookie.Value != r.URL.Query().Get("state") {
