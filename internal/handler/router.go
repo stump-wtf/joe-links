@@ -96,7 +96,12 @@ func NewRouter(deps Deps) http.Handler {
 	r.Handle("/static/*", http.StripPrefix("/static", http.FileServerFS(staticSub)))
 
 	// Auth routes (no auth required)
+	deps.AuthHandlers.LoginPage = NewLoginHandler().Render
 	r.Get("/auth/login", deps.AuthHandlers.Login)
+	// Local-mode credential sign-in (ADR-0024). Registered in both modes: in
+	// OIDC mode the handler refuses the method, so the route never becomes a
+	// password door the operator never opened.
+	r.Post("/auth/login", deps.AuthHandlers.LocalLogin)
 	r.Get("/auth/callback", deps.AuthHandlers.Callback)
 	r.Post("/auth/logout", deps.AuthHandlers.Logout)
 

@@ -111,6 +111,7 @@ sequenceDiagram
 * `coreos/go-oidc`: https://github.com/coreos/go-oidc
 * `alexedwards/scs`: https://github.com/alexedwards/scs
 * Related: ADR-0001 (Technology Stack), ADR-0002 (Database — users table lives here)
+* Amended by ADR-0024: where no provider is configured, joe-links may serve with one local admin account instead of requiring OIDC. Everything this record decides still governs every deployment that configures a provider.
 * The `users` table schema (at minimum): `id`, `provider`, `subject`, `email`, `display_name`, `role`, `created_at`, `updated_at`
 * PKCE (RFC 7636) SHOULD be used for all authorization code flows
 * State parameter MUST be validated on callback to prevent CSRF

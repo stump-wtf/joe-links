@@ -15,11 +15,13 @@ joe-links is configured via environment variables (prefixed with `JOE_`) or a `j
 | `JOE_HTTP_ADDR` | `:8080` | No | HTTP listen address (host:port) |
 | `JOE_DB_DRIVER` | -- | Yes | Database driver: `sqlite3`, `mysql`, or `postgres` |
 | `JOE_DB_DSN` | -- | Yes | Database connection string (see examples below) |
-| `JOE_OIDC_ISSUER` | -- | Yes | OIDC provider discovery URL (must serve `/.well-known/openid-configuration`) |
-| `JOE_OIDC_CLIENT_ID` | -- | Yes | OAuth2 client ID from your OIDC provider |
-| `JOE_OIDC_CLIENT_SECRET` | -- | Yes | OAuth2 client secret from your OIDC provider |
-| `JOE_OIDC_REDIRECT_URL` | -- | Yes | Full callback URL (e.g., `https://go.example.com/auth/callback`) |
-| `JOE_ADMIN_EMAIL` | -- | No | Email address permanently granted the `admin` role on every login |
+| `JOE_OIDC_ISSUER` | -- | OIDC mode | OIDC provider discovery URL (must serve `/.well-known/openid-configuration`) |
+| `JOE_OIDC_CLIENT_ID` | -- | OIDC mode | OAuth2 client ID from your OIDC provider |
+| `JOE_OIDC_CLIENT_SECRET` | -- | OIDC mode | OAuth2 client secret from your OIDC provider |
+| `JOE_OIDC_REDIRECT_URL` | -- | OIDC mode | Full callback URL (e.g., `https://go.example.com/auth/callback`) |
+| `JOE_ADMIN_USERNAME` | `admin` | No | Local mode: the username of the single local admin account (used only when no OIDC setting is set) |
+| `JOE_ADMIN_PASSWORD` | -- | Local mode | Local mode: password for that account. At least 12 characters; stored only as a salted PBKDF2-HMAC-SHA256 hash. Refused together with any `JOE_OIDC_*` setting |
+| `JOE_ADMIN_EMAIL` | -- | No | Email address permanently granted the `admin` role on every login (OIDC mode; in local mode it defaults to `<username>@local`) |
 | `JOE_OIDC_ADMIN_GROUPS` | -- | No | Comma-separated OIDC group names whose members are granted the `admin` role (see below) |
 | `JOE_OIDC_GROUPS_CLAIM` | `groups` | No | OIDC token claim that contains the user's group list |
 | `JOE_SHORT_KEYWORD` | *(first DNS label of server hostname)* | No | Short-link prefix used in the UI and browser extension. Derived from the server hostname at request time — `go` from `go.example.com`, `links` from `links.example.com`, `localhost` from `localhost:8080`. Set explicitly if your hostname doesn't match your desired keyword |
@@ -47,6 +49,27 @@ JOE_LLM_PROVIDER=openai-compatible
 JOE_LLM_BASE_URL=http://localhost:11434/v1
 JOE_LLM_MODEL=llama3.2
 ```
+
+## Authentication Mode
+
+joe-links picks its login path from what you configure, and refuses to start if
+the choice is ambiguous.
+
+| Configuration | Mode | Sign-in |
+|---------------|------|---------|
+| Any `JOE_OIDC_*` setting (all four required) | OIDC | Redirect to your provider; no password is ever checked |
+| No `JOE_OIDC_*` setting, `JOE_ADMIN_PASSWORD` set | Local | `GET /auth/login` form, one admin account (`JOE_ADMIN_USERNAME`, default `admin`) |
+| Neither | -- | Startup error: joe-links never serves without a login path |
+| Both | -- | Startup error: a password beside a working provider is a second, weaker door |
+
+Local mode exists for home instances, for trying joe-links out, and for an
+instance an auth proxy already fronts. It stores no plaintext password: the
+account's hash (salted PBKDF2-HMAC-SHA256) lives in `local_credentials`, separate
+from `users`, and is rewritten on every startup from `JOE_ADMIN_PASSWORD`, so
+rotating the env var rotates the password. There is no signup, no password-reset
+flow and no second local account — if you need per-person identities, configure a
+provider. Failed sign-ins are throttled per client address: 10 attempts per 5
+minutes, then `429` with `Retry-After`.
 
 ## Admin Role Assignment
 

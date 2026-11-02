@@ -13,6 +13,7 @@ A self-hosted "go links" service. Type `go/slack` in your browser and get redire
 
 - **Short memorable slugs** -- `[a-z0-9][a-z0-9-]*[a-z0-9]`, min 2 characters, globally unique
 - **OIDC authentication** -- sign in with Google, Okta, Authentik, Keycloak, or any OpenID Connect provider
+- **Optional local admin login** -- no provider configured? joe-links still boots and signs in one admin account with a username and password, which is what a homelab or an instance behind an auth proxy usually wants
 - **Co-ownership** -- multiple users can manage the same link
 - **REST API with Personal Access Tokens** -- automate link management from scripts and CI
 - **OpenAPI / Swagger UI** -- interactive API docs at `/api/docs/`
@@ -24,7 +25,8 @@ A self-hosted "go links" service. Type `go/slack` in your browser and get redire
 
 ```bash
 cp .env.example .env
-# Edit .env with your OIDC provider details
+# Edit .env with your OIDC provider details, or leave the OIDC fields empty and
+# set JOE_ADMIN_PASSWORD to sign in with one local admin account instead
 docker compose up -d
 # Visit http://localhost:8080
 ```
@@ -56,6 +58,8 @@ All configuration uses environment variables prefixed with `JOE_`. You can also 
 | `JOE_OIDC_CLIENT_SECRET` | -- | OAuth2 client secret |
 | `JOE_OIDC_REDIRECT_URL` | -- | OAuth2 callback URL (e.g. `https://go.example.com/auth/callback`) |
 | `JOE_ADMIN_EMAIL` | -- | Email address permanently granted the `admin` role on every login |
+| `JOE_ADMIN_USERNAME` | `admin` | Local mode: username of the single local admin account (only read when no `JOE_OIDC_*` setting is present) |
+| `JOE_ADMIN_PASSWORD` | -- | Local mode: password for that account, at least 12 characters, stored only as a salted PBKDF2-HMAC-SHA256 hash. Refused together with any `JOE_OIDC_*` setting |
 | `JOE_OIDC_ADMIN_GROUPS` | -- | Comma-separated OIDC group names whose members are granted the `admin` role |
 | `JOE_OIDC_GROUPS_CLAIM` | `groups` | OIDC token claim that contains the user's group list |
 | `JOE_SHORT_KEYWORD` | *(first DNS label of server hostname)* | Short-link prefix used in the UI and browser extension. Defaults to the first part of the server hostname (e.g. `go` from `go.example.com`). Set this explicitly if your hostname doesn't match your desired keyword (e.g. `JOE_SHORT_KEYWORD=go`) |

@@ -1,10 +1,13 @@
-// Governing: SPEC-0001 REQ "OIDC-Only Authentication", ADR-0003
+// Governing: SPEC-0001 REQ "OIDC-Only Authentication", "Local Admin Authentication", ADR-0003, ADR-0024
 package auth
 
 import (
 	"context"
+	"errors"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +32,7 @@ func safeReturnURL(u string) string {
 	return u
 }
 
-// Handlers provides HTTP handlers for the OIDC authentication flow.
+// Handlers provides HTTP handlers for the authentication flows.
 type Handlers struct {
 	provider      *Provider
 	sessions      *scs.SessionManager
@@ -38,7 +41,21 @@ type Handlers struct {
 	adminGroups   []string // OIDC group names that grant the admin role
 	groupsClaim   string   // OIDC claim name for groups (default: "groups")
 	secureCookies bool
+
+	// Local is set only in local mode (no OIDC provider configured). When nil,
+	// /auth/login is the OIDC redirect and POST /auth/login is refused.
+	// Governing: SPEC-0001 REQ "Authentication Mode Selection", ADR-0024
+	Local *LocalAuthenticator
+
+	// LoginPage renders the local-mode sign-in form. failure is a message to
+	// show above it, "" for a fresh form. It is injected for the same reason
+	// Middleware.Forbidden is: the handler package imports auth, so auth cannot
+	// import the page renderer.
+	LoginPage LoginPageFunc
 }
+
+// LoginPageFunc renders the local-mode sign-in form.
+type LoginPageFunc func(w http.ResponseWriter, r *http.Request, returnURL, failure string)
 
 // NewHandlers creates a new Handlers with the given dependencies.
 // Set secureCookies=false for local HTTP development.
@@ -57,8 +74,14 @@ func NewHandlers(p *Provider, sm *scs.SessionManager, us *store.UserStore, admin
 	}
 }
 
-// Login initiates the OIDC authorization code flow with PKCE.
+// Login starts the sign-in. In OIDC mode it initiates the authorization code
+// flow with PKCE; in local mode it renders the credential form.
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
+	if h.Local != nil {
+		h.renderLoginPage(w, r, safeReturnURL(r.URL.Query().Get("return_url")), "")
+		return
+	}
+
 	state, err := GenerateState()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -80,6 +103,66 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	h.setPreAuthCookie(w, cookieRedirect, safeReturnURL(r.URL.Query().Get("return_url")))
 
 	http.Redirect(w, r, h.provider.AuthCodeURL(state, challenge), http.StatusFound)
+}
+
+// LocalLogin completes a local-mode sign-in. In OIDC mode no credentials exist
+// to check, so the method is refused rather than answered with a generic
+// failure: a deployment that configured a provider should hear loudly that
+// something tried to use a password door it never opened.
+// Governing: SPEC-0001 REQ "Local Admin Authentication", ADR-0024
+func (h *Handlers) LocalLogin(w http.ResponseWriter, r *http.Request) {
+	if h.Local == nil {
+		http.Error(w, "password sign-in is not available: this instance authenticates with OIDC", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	returnURL := safeReturnURL(r.Form.Get("return_url"))
+
+	if ok, wait := h.Local.AllowAttempt(r); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+		w.WriteHeader(http.StatusTooManyRequests)
+		h.renderLoginPage(w, r, returnURL, "Too many sign-in attempts. Try again in a few minutes.")
+		return
+	}
+
+	user, err := h.Local.Authenticate(r.Context(), r.Form.Get("username"), r.Form.Get("password"))
+	if err != nil {
+		if !errors.Is(err, ErrInvalidCredentials) {
+			log.Printf("local login: %v", err)
+			http.Error(w, "sign-in unavailable", http.StatusInternalServerError)
+			return
+		}
+		h.Local.RecordFailedAttempt(r)
+		log.Printf("local login: failed attempt for username %q from %s", strings.TrimSpace(r.Form.Get("username")), loginAttemptKey(r))
+		w.WriteHeader(http.StatusUnauthorized)
+		h.renderLoginPage(w, r, returnURL, "Invalid username or password.")
+		return
+	}
+
+	if err := h.sessions.RenewToken(r.Context()); err != nil {
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return
+	}
+	h.sessions.Put(r.Context(), SessionUserIDKey, user.ID)
+	h.sessions.Put(r.Context(), SessionRoleKey, user.Role)
+	h.Local.RecordSuccessfulAttempt(r)
+	log.Printf("local login: signed in %s (local admin account)", h.Local.Username())
+
+	http.Redirect(w, r, returnURL, http.StatusFound)
+}
+
+// renderLoginPage draws the local-mode credential form, or fails loudly when
+// this process was wired without a renderer.
+func (h *Handlers) renderLoginPage(w http.ResponseWriter, r *http.Request, returnURL, failure string) {
+	if h.LoginPage == nil {
+		log.Printf("local login: no login page renderer is configured")
+		http.Error(w, "local login page is not configured", http.StatusInternalServerError)
+		return
+	}
+	h.LoginPage(w, r, returnURL, failure)
 }
 
 // Callback handles the OIDC provider redirect after authentication.
