@@ -32,7 +32,7 @@ The same shape was found in a sibling repo at the same time (issue #345). This r
 Chosen: **B**. A build lane's own gate refuses a tree in which one ADR number is claimed by more than one record.
 
 1. **One implementation**: `internal/adrguard` reads a directory of design records, treats `ADR-<digits>-<slug>.md` as a claim on that number (leading zeros stripped, so `ADR-24` and `ADR-0024` are one claim), and reports every number two or more files claim in the same directory. Files whose names carry no number claim nothing.
-2. **Two entry points, one check**: `cmd/adr-check` is wired into `make lint`, and `internal/packaging` runs the same check over `docs/adrs/` under `go test ./...`, which the CI test job already runs. Neither duplicates the rule.
+2. **Two entry points, one check**: `cmd/adr-check` is wired into `make lint`, and `internal/packaging` runs the same check over `docs/adrs/` under `go test ./...`. Neither duplicates the rule. Note where each actually runs: Actions on the canonical forge (gitea.stump.rocks) runs only gitleaks — branch pushes produce no other runs there — so the entry point that binds merge-bound work on the canonical host is a lane's own `make lint`; the test-suite entry point enforces wherever `go test ./...` runs, today only the GitHub push mirror, which does not gate merges here.
 3. **The message names both paths**, and when the colliding records carry different titles it says so, because "one number, two decisions" needs a ruling rather than a renumber.
 4. **Numbers are scoped per directory**, so a design record and a record of another kind may share a number.
 5. **Allocating a number stays a judgement call** for the lane: a number beyond the highest one already claimed by an open pull request is the safe pick, and this record is itself an example — it took 0025 because 0024 was already claimed twice.
@@ -42,12 +42,13 @@ Chosen: **B**. A build lane's own gate refuses a tree in which one ADR number is
 **Positive**
 
 * A lane that adds a second record under a number already used in the tree is stopped by a failing gate that names both files, instead of by a reviewer.
-* `main` goes red while a collision sits in it, so the ambiguity cannot persist quietly.
+* Wherever the check runs, a collision turns that run red, so the ambiguity cannot persist quietly — subject to the coverage limits below.
 * No credentials, no network, no fetched base branch: the same result locally, in CI and on a fork.
 
 **Negative**
 
 * The check sees the tree it runs on. Two branches that are both still open, and neither of which contains the other's file, are not flagged until one of them lands — the pre-merge case belongs to the merge train's own colliding-number check (option C), and a lane should still check open pull requests before it allocates.
+* The canonical forge does not run the check in CI: its Actions execute only gitleaks, and the `go test` job lives on the GitHub push mirror, which does not gate merges. Until option C lands on the canonical forge, nothing reruns the check after a merge, and the only enforcement for merge-bound work is a lane's own `make lint` / `make test`.
 * A repo must opt in by pointing the check at its own records directory; it does not propagate on its own.
 
 ## More Information
