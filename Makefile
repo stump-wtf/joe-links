@@ -1,4 +1,4 @@
-.PHONY: build check lint fmt vet tidy-check test run migrate css clean tidy swagger dev dev-stop docker-build docker-up docker-down ext-safari
+.PHONY: build check lint fmt vet tidy-check adr-check test run migrate css clean tidy swagger dev dev-stop docker-build docker-up docker-down ext-safari
 
 BINARY := joe-links
 
@@ -9,7 +9,7 @@ build: css
 check: lint test
 
 # Static checks only (the uniform `make lint` entry point).
-lint: fmt vet tidy-check
+lint: fmt vet tidy-check adr-check
 
 fmt:
 	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
@@ -24,6 +24,12 @@ tidy-check:
 	@go mod tidy -diff || { \
 		echo "go.mod/go.sum are not tidy — run 'make tidy' and commit the result"; exit 1; \
 	}
+
+# Fail when one ADR number is claimed by two records: two lanes cutting
+# branches off a moving main can each take the same "next free" number, and
+# the merge never notices. Governing: ADR-0025, issue #345.
+adr-check:
+	@go run ./cmd/adr-check
 
 test:
 	go test ./...
