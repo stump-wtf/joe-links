@@ -34,6 +34,12 @@ type Claim struct {
 	// Path is the record's path as Scan was pointed at it.
 	Path string
 
+	// Side names the tree a claim was read from, for the checks that compare
+	// two of them: "main" for a record the branch never saw. It stays empty
+	// when the claim came from the working tree, so a collision inside one tree
+	// reads exactly as it always did.
+	Side string
+
 	// Number is the claimed number with leading zeros stripped, so ADR-24 and
 	// ADR-0024 are one claim rather than two.
 	Number string
@@ -81,21 +87,36 @@ func Scan(dir string) ([]Claim, error) {
 		return nil, err
 	}
 
-	claims := make([]Claim, 0, len(entries))
+	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		match := adrFileName.FindStringSubmatch(entry.Name())
+		names = append(names, filepath.Join(dir, entry.Name()))
+	}
+	return ClaimsFromPaths(names, os.ReadFile)
+}
+
+// ClaimsFromPaths builds claims from a list of record paths, the form a git
+// tree listing hands over, reading each file through read. That leaves the
+// caller in charge of where contents come from: the working tree for a branch,
+// `git show <ref>:<path>` for the revision it is compared against. Files whose
+// names carry no number claim nothing, exactly as in Scan.
+func ClaimsFromPaths(paths []string, read func(path string) ([]byte, error)) ([]Claim, error) {
+	if read == nil {
+		read = os.ReadFile
+	}
+	claims := make([]Claim, 0, len(paths))
+	for _, path := range paths {
+		match := adrFileName.FindStringSubmatch(filepath.Base(filepath.ToSlash(path)))
 		if match == nil {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
 		claims = append(claims, Claim{
 			Path:   path,
 			Number: normalize(match[1]),
 			Digits: match[1],
-			Title:  title(path, match[2]),
+			Title:  title(read, path, match[2]),
 		})
 	}
 
@@ -103,10 +124,47 @@ func Scan(dir string) ([]Claim, error) {
 	return claims, nil
 }
 
+// MergedPaths returns the record paths a merge of a branch into its base would
+// leave behind: everything either side holds, minus what the branch deleted
+// since the two diverged.
+//
+// The divergence point is what makes the answer honest. Without it a record
+// added on the base after the branch was cut looks like one the branch
+// deleted, and that is precisely the collision this gate exists to catch: two
+// lanes that never saw each other's file. With it, a branch that renames a
+// record on purpose is still just a rename.
+func MergedPaths(divergedPaths, basePaths, branchPaths []string) []string {
+	held := make(map[string]bool, len(divergedPaths))
+	for _, path := range divergedPaths {
+		held[path] = true
+	}
+	for _, path := range branchPaths {
+		delete(held, path)
+	}
+
+	merged := make(map[string]bool, len(basePaths)+len(branchPaths))
+	for _, path := range basePaths {
+		merged[path] = true
+	}
+	for _, path := range branchPaths {
+		merged[path] = true
+	}
+	for path := range held {
+		delete(merged, path)
+	}
+
+	paths := make([]string, 0, len(merged))
+	for path := range merged {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // title reads a record's H1 title, falling back to the file name's slug when
 // the record has no heading a reader would recognize.
-func title(path, slug string) string {
-	data, err := os.ReadFile(path)
+func title(read func(path string) ([]byte, error), path, slug string) string {
+	data, err := read(path)
 	if err != nil {
 		return humanize(slug)
 	}
@@ -124,18 +182,34 @@ func humanize(slug string) string {
 }
 
 // Collisions groups the claims by directory and number and returns every
-// number more than one file claims.
+// number more than one file claims. The same path listed twice counts once:
+// comparing two trees hands over one record twice when the branch never
+// touched it, and that is one decision, not two.
 func Collisions(claims []Claim) []Collision {
-	groups := map[claimKey][]Claim{}
+	groups := map[claimKey]map[string]Claim{}
 	for _, claim := range claims {
 		k := claimKey{dir: filepath.Dir(claim.Path), number: claim.Number}
-		groups[k] = append(groups[k], claim)
+		if groups[k] == nil {
+			groups[k] = map[string]Claim{}
+		}
+		// A claim read from the working tree wins over one read from another
+		// revision, so the message quotes the copy the reader can open. Only
+		// a claim carrying a side can be replaced, and only by one that
+		// carries none.
+		if seen, ok := groups[k][claim.Path]; ok && seen.Side == "" {
+			continue
+		}
+		groups[k][claim.Path] = claim
 	}
 
 	var out []Collision
-	for k, group := range groups {
-		if len(group) < 2 {
+	for k, byPath := range groups {
+		if len(byPath) < 2 {
 			continue
+		}
+		group := make([]Claim, 0, len(byPath))
+		for _, claim := range byPath {
+			group = append(group, claim)
 		}
 		sort.Slice(group, func(i, j int) bool { return group[i].Path < group[j].Path })
 		out = append(out, Collision{Dir: k.dir, Number: k.number, Claims: group})
@@ -175,11 +249,13 @@ func (c Collision) TitlesDiffer() bool {
 }
 
 // Message spells the collision out for a developer or a CI log: the number,
-// every file claiming it, and which decision each of them records.
+// every file claiming it, and which decision each of them records. When the
+// claims came from different trees the message says which side each record is
+// on, because "mine is on main" is the fact a lane needs in order to fix it.
 func (c Collision) Message() string {
 	paths := make([]string, len(c.Claims))
 	for i, claim := range c.Claims {
-		paths[i] = claim.Path
+		paths[i] = claim.display()
 	}
 	if !c.TitlesDiffer() {
 		return fmt.Sprintf("ADR-%s is claimed by %d files in %s: %s",
@@ -187,8 +263,17 @@ func (c Collision) Message() string {
 	}
 	titles := make([]string, len(c.Claims))
 	for i, claim := range c.Claims {
-		titles[i] = fmt.Sprintf("%s records %q", claim.Path, claim.Title)
+		titles[i] = fmt.Sprintf("%s records %q", claim.display(), claim.Title)
 	}
 	return fmt.Sprintf("ADR-%s is claimed by %d different decisions in %s: %s",
 		c.Number, len(c.Claims), c.Dir, strings.Join(titles, "; "))
+}
+
+// display is the path plus the tree it was read from, when that differs from
+// the tree the check runs in.
+func (c Claim) display() string {
+	if c.Side == "" {
+		return c.Path
+	}
+	return c.Path + " (on " + c.Side + ")"
 }

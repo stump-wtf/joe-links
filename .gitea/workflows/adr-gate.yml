@@ -1,0 +1,39 @@
+# ADR number gate: one number must name one decision on this branch, and after
+# it merges. Two lanes cutting branches off a moving main each take the next
+# number that looks free, so a record can land under a number main already
+# claims without either tree ever showing the collision. Governing: ADR-0025 and
+# ADR-0026, issue #345.
+name: ADR number gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adr-numbers:
+    name: One ADR number, one decision
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # The comparison needs the history the two sides share, so a full fetch
+        # rather than the shallow default.
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: ADR numbers unique against the base branch
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: |
+          base="${BASE_BRANCH:-main}"
+          git fetch --no-tags origin "+refs/heads/${base}:refs/remotes/origin/${base}"
+          make adr-vs-base BASE="origin/${base}"

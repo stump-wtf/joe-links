@@ -1,4 +1,4 @@
-.PHONY: build check lint fmt vet tidy-check adr-check test run migrate css clean tidy swagger dev dev-stop docker-build docker-up docker-down ext-safari
+.PHONY: build check lint fmt vet tidy-check adr-check adr-vs-base test run migrate css clean tidy swagger dev dev-stop docker-build docker-up docker-down ext-safari
 
 BINARY := joe-links
 
@@ -30,6 +30,16 @@ tidy-check:
 # the merge never notices. Governing: ADR-0025, issue #345.
 adr-check:
 	@go run ./cmd/adr-check
+
+# The same rule across two branches. A number main already claims with a record
+# this branch was cut before cannot be seen from the branch's own tree, so this
+# checks the set a merge would leave behind. It is its own target rather than part of
+# `lint`, because it needs a fetched base and `make lint` has to keep working
+# offline; CI runs it on every pull request. Point it elsewhere with
+# `make adr-vs-base BASE=refs/remotes/origin/main`. Governing: ADR-0026.
+BASE ?= origin/main
+adr-vs-base:
+	@go run ./cmd/adr-check -base "$(BASE)"
 
 test:
 	go test ./...
