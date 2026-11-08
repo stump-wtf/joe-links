@@ -8,7 +8,7 @@ decision-makers: proposed by joestump-agent, awaiting joestump
 
 ## Context and Problem Statement
 
-ADR-0025 put the collision check inside the tree it runs on, and recorded the limit that came with it: "Two branches that are both still open, and neither of which contains the other's file, are not flagged until one of them lands." That is not an edge case — it is the report issue #345 was filed from. `ADR-0024-keyword-matching-case-folding.md` (PR #335) and `ADR-0024-optional-oidc-local-admin.md` (PR #343) were both open at the same time, each branch holding one of them, each tree looking clean on its own, and neither gate said anything. The ambiguity therefore still arrives: it just arrives at the second merge instead of at review.
+ADR-0025 put the collision check inside the tree it runs on, and recorded the limit that came with it: "Two branches that are both still open, and neither of which contains the other's file, are not flagged until one of them lands." That is not an edge case — it is the report issue #345 was filed from. `ADR-0027-keyword-matching-case-folding.md` (PR #335) and `ADR-0027-optional-oidc-local-admin.md` (PR #343) were both open at the same time, each branch holding one of them, each tree looking clean on its own, and neither gate said anything. The ambiguity therefore still arrives: it just arrives at the second merge instead of at review.
 
 The same ADR-0025 note says the check must not need "a fetched base branch", because a check that is green on one runner and red on another teaches people to re-run CI. This record keeps that driver in mind and decides where the base comparison belongs, rather than pretending the branch-only view is enough.
 
@@ -32,7 +32,7 @@ Chosen: **C**.
 
 1. **`adr-check -base <ref>` compares the merge, not the branch.** The visible set is everything on either side, minus what the branch deleted since the two diverged. `internal/adrguard.MergedPaths` holds that set logic; `internal/adrguard` still owns what a collision is, so the rule stays in one place and a design record and its renumber cannot both be reported.
 2. **The rule is unchanged.** A number is still claimed by `ADR-<digits>-<slug>.md`, leading zeros still carry no identity, and numbers are still scoped per directory. What widened is only which records the check can see.
-3. **A failure says which side each record is on.** `docs/adrs/ADR-0024-optional-oidc-local-admin.md (on origin/main)` is the difference between rebasing and renumbering, so the message names the tree as well as the path.
+3. **A failure says which side each record is on.** `docs/adrs/ADR-0027-optional-oidc-local-admin.md (on origin/main)` is the difference between rebasing and renumbering, so the message names the tree as well as the path.
 4. **`make adr-vs-base` is a separate target, not part of `make lint`.** CI runs it on every pull request and on `main`. Locally it is one command, and when the base ref is absent it fails with the fetch that would make the comparison possible rather than reading as a pass — a comparison that saw nothing is not a comparison that passed.
 5. **Renumbering stays a legal move.** A branch that deletes its own colliding record and re-adds it under a free number produces, after the merge, one record per number, and the gate passes it.
 

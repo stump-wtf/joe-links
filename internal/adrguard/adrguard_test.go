@@ -25,8 +25,8 @@ func writeRecord(t *testing.T, dir, name, number, title string) string {
 
 func TestCollisionsFailsOnSameNumberPair(t *testing.T) {
 	dir := t.TempDir()
-	caseFold := writeRecord(t, dir, "ADR-0024-keyword-matching-case-folding.md", "0024", "Keyword Matching Case Folding")
-	oidc := writeRecord(t, dir, "ADR-0024-optional-oidc-local-admin.md", "0024", "Optional OIDC With A Local Admin Login")
+	caseFold := writeRecord(t, dir, "ADR-0027-keyword-matching-case-folding.md", "0024", "Keyword Matching Case Folding")
+	oidc := writeRecord(t, dir, "ADR-0027-optional-oidc-local-admin.md", "0024", "Optional OIDC With A Local Admin Login")
 
 	claims, err := Scan(dir)
 	if err != nil {
@@ -95,7 +95,7 @@ func TestScanIgnoresNamesThatClaimNothing(t *testing.T) {
 		t.Error("an unnumbered file must claim nothing")
 	}
 	// A lower-case name and an unpadded number are still records, and they
-	// claim the same number as ADR-0024 would.
+	// claim the same number as ADR-0027 would.
 	for _, name := range []string{"adr-0024-example.md", "ADR-24-late.md"} {
 		claim, ok := byPath[name]
 		if !ok {

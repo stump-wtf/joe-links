@@ -76,6 +76,10 @@ func (h *KeywordsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// keywordRE keeps every stored keyword lowercase, which is what lets
+	// GetByKeyword fold only the candidate (SPEC-0019 REQ "Case-Folded Keyword
+	// Matching"); uppercase names are rejected here rather than folded in, so
+	// the keyword corpus has one canonical spelling per name.
 	// Governing: SPEC-0011 REQ "Admin Keywords Screen" — reject duplicate keywords
 	if existing, _ := h.keywords.GetByKeyword(r.Context(), keyword); existing != nil {
 		h.renderList(w, r, user, "A keyword with that name already exists.")

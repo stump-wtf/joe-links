@@ -8,7 +8,7 @@ decision-makers: proposed by joestump-agent, awaiting joestump
 
 ## Context and Problem Statement
 
-Both automation identities cut a branch off a moving `main` and pick the next ADR number that looks free there. Two lanes racing the same gap therefore pick the same number, and because the files have different paths the second merge is clean: `docs/adrs/ADR-0024-keyword-matching-case-folding.md` and `docs/adrs/ADR-0024-optional-oidc-local-admin.md` can both land, each `status: proposed`, and nothing anywhere notices. The failure surfaces later, in review, when "ratify ADR-0024" turns out to be a different question in each pull request, and every later reference to that number is ambiguous.
+Both automation identities cut a branch off a moving `main` and pick the next ADR number that looks free there. Two lanes racing the same gap therefore pick the same number, and because the files have different paths the second merge is clean: `docs/adrs/ADR-0027-keyword-matching-case-folding.md` and `docs/adrs/ADR-0027-optional-oidc-local-admin.md` can both land, each `status: proposed`, and nothing anywhere notices. The failure surfaces later, in review, when "ratify ADR-0027" turns out to be a different question in each pull request, and every later reference to that number is ambiguous.
 
 The same shape was found in a sibling repo at the same time (issue #345). This record decides where the check lives and what it refuses; it deliberately rules on nothing about those open pull requests.
 
@@ -31,7 +31,7 @@ The same shape was found in a sibling repo at the same time (issue #345). This r
 
 Chosen: **B**. A build lane's own gate refuses a tree in which one ADR number is claimed by more than one record.
 
-1. **One implementation**: `internal/adrguard` reads a directory of design records, treats `ADR-<digits>-<slug>.md` as a claim on that number (leading zeros stripped, so `ADR-24` and `ADR-0024` are one claim), and reports every number two or more files claim in the same directory. Files whose names carry no number claim nothing.
+1. **One implementation**: `internal/adrguard` reads a directory of design records, treats `ADR-<digits>-<slug>.md` as a claim on that number (leading zeros stripped, so `ADR-24` and `ADR-0027` are one claim), and reports every number two or more files claim in the same directory. Files whose names carry no number claim nothing.
 2. **Two entry points, one check**: `cmd/adr-check` is wired into `make lint`, and `internal/packaging` runs the same check over `docs/adrs/` under `go test ./...`. Neither duplicates the rule. Note where each actually runs: Actions on the canonical forge (gitea.stump.rocks) runs only gitleaks — branch pushes produce no other runs there — so the entry point that binds merge-bound work on the canonical host is a lane's own `make lint`; the test-suite entry point enforces wherever `go test ./...` runs, today only the GitHub push mirror, which does not gate merges here.
 3. **The message names both paths**, and when the colliding records carry different titles it says so, because "one number, two decisions" needs a ruling rather than a renumber.
 4. **Numbers are scoped per directory**, so a design record and a record of another kind may share a number.

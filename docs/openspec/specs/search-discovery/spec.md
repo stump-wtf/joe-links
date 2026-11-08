@@ -1,8 +1,8 @@
 ---
 status: draft
 date: 2026-07-17
-implements: [ADR-0019]
-requires: [SPEC-0002, SPEC-0004, SPEC-0005, SPEC-0006, SPEC-0007, SPEC-0008, SPEC-0009, SPEC-0010]
+implements: [ADR-0019, ADR-0027]
+requires: [SPEC-0002, SPEC-0004, SPEC-0005, SPEC-0006, SPEC-0007, SPEC-0008, SPEC-0009, SPEC-0010, SPEC-0011]
 ---
 
 # SPEC-0019: Search & Discovery
@@ -11,7 +11,8 @@ requires: [SPEC-0002, SPEC-0004, SPEC-0005, SPEC-0006, SPEC-0007, SPEC-0008, SPE
 
 This specification defines the search and discovery layer for joe-links (epic #218): case-insensitive slug resolution, a lightweight autocomplete suggest endpoint at `GET /api/v1/links/suggest`, "Did you mean go/…?" suggestions on the 404 page, omnibox integration in the browser extension, and optional slug-normalization forgiveness. Per ADR-0019, all matching uses portable SQL (`LIKE` only — no trigram or FTS extensions, per ADR-0002) plus in-Go ranking and bounded Levenshtein distance, and **every discovery surface is visibility-filtered in the shared store layer** so that suggestions can never reveal a slug the viewer could not already discover under SPEC-0010.
 
-See ADR-0019 (Search & Discovery), SPEC-0004 (Application Views and Routing — the 404 page this extends), SPEC-0005 (REST API Layer), SPEC-0006 (PAT bearer auth), SPEC-0008 (Browser Extension), SPEC-0009 (URL Variable Substitution), SPEC-0010 (Link Visibility Modes), SPEC-0017 (the unrelated `POST /api/v1/links/suggest` LLM metadata operation sharing the path).
+See ADR-0019 (Search & Discovery), ADR-0027 (keyword matching case-folding), SPEC-0004 (Application Views and Routing — the 404 page this extends), SPEC-0005 (REST API Layer), SPEC-0006 (PAT bearer auth), SPEC-0008 (Browser Extension), SPEC-0009 (URL Variable Substitution), SPEC-0010 (Link Visibility Modes), SPEC-0011 (Admin
+Keywords Screen — the intake validation that keeps the keyword corpus canonical), SPEC-0017 (the unrelated `POST /api/v1/links/suggest` LLM metadata operation sharing the path).
 
 ---
 
@@ -23,7 +24,7 @@ The slug resolver (SPEC-0004 REQ "Slug Resolver and 404 Page") MUST resolve slug
 
 Case-folding MUST apply uniformly to exact-match lookup and to every prefix candidate during multi-segment resolution (SPEC-0009 REQ "Multi-Segment Path Resolution"). Path segments consumed as variable values MUST be passed to substitution with their original case preserved — only the slug-prefix portion of the path is lowercased. Resolution precedence MUST be unchanged: keyword host routing and path-based keyword routing (ADR-0011, SPEC-0008) are evaluated before slug resolution exactly as today, and reserved route prefixes (SPEC-0004 REQ "Route Registration and Priority") keep precedence over the resolver. Slug creation and update validation MUST be unchanged: uppercase slugs remain rejected, keeping the stored corpus canonical.
 
-> **Known asymmetry (recorded, accepted — PR #281).** Server-side keyword matching is *not* case-folded: the keyword store is queried with the raw host or first path segment, exactly as before this spec. When a keyword and a link share a name (e.g. keyword `gh` and link `gh`), `/gh/x` routes via the keyword while `/GH/x` falls through keyword routing and resolves via the case-folded slug link — the same path shape reaching a different destination depending on case. This is faithful to the precedence freeze above (this spec explicitly leaves keyword behavior untouched); case-folding keyword matching is SPEC-0008 / ADR-0011 territory for a future revision.
+> **Asymmetry closed (issue #284, ADR-0027).** Server-side keyword matching was left case-sensitive by PR #281, so when a keyword and a link shared a name (keyword `gh` and link `gh`), `/gh/x` routed via the keyword while `/GH/x` fell through to the case-folded slug link. REQ "Case-Folded Keyword Matching" below closes it; the precedence freeze in this requirement is unchanged.
 
 #### Scenario: Mixed-Case Slug Resolves
 
@@ -44,6 +45,39 @@ Case-folding MUST apply uniformly to exact-match lookup and to every prefix cand
 
 - **WHEN** a link is created or updated with slug `Jira`
 - **THEN** validation MUST reject it with the existing slug-format error; case-insensitivity is a resolution behavior only
+
+---
+
+### Requirement: Case-Folded Keyword Matching
+
+Keyword routing (ADR-0011: host-based and `/{keyword}/{slug}` path-based) MUST match the candidate host or first path segment case-insensitively, so that the case of one URL segment cannot change which resource a request reaches. Keyword intake (`SPEC-0011` REQ "Admin Keywords Screen") accepts only lowercase names, so the stored corpus is canonical; the keyword store MUST therefore fold the candidate before comparison and MUST NOT require a database collation or schema change (ADR-0002) — folding in Go is also what makes the behavior identical on sqlite3, MySQL and PostgreSQL, whose default collations disagreed. Host lookup folds as well, since DNS hostnames are case-insensitive.
+
+Resolution precedence MUST be unchanged: keyword routing is still evaluated before slug resolution, and a keyword name remains a valid slug to create — shadowing a link by keyword name is existing behavior, now applied to every case variant. The path remainder substituted into `{slug}` MUST keep its original case, matching how variable values are passed to slug links. Keyword creation validation MUST be unchanged: an uppercase keyword is still rejected, keeping one canonical spelling per name; the admin duplicate check is case-insensitive as a consequence of the fold.
+
+#### Scenario: Case-Variant Keyword Path Reaches The Same Destination
+
+- **WHEN** keyword `gh` is registered and a link with slug `gh` also exists, and a request arrives at `/GH/joestump`
+- **THEN** the server MUST route it via the keyword template, responding `302 Found` to the same target `/gh/joestump` reaches, and MUST NOT resolve the link with slug `gh`
+
+#### Scenario: Case-Variant Keyword Host Routes Via Keyword
+
+- **WHEN** keyword `go` is registered and a request arrives with `Host: GO` for path `/slack`
+- **THEN** the server MUST route it via the `go` keyword template exactly as it would `Host: go`, before any slug lookup
+
+#### Scenario: Keyword Name Stays A Creatable Slug
+
+- **WHEN** keyword `wtf` is registered and a user creates a link with slug `wtf`
+- **THEN** creation MUST succeed, and `/wtf/x` and `/WTF/x` MUST both resolve via the keyword
+
+#### Scenario: Keyword Miss Falls Through To Slug Resolution
+
+- **WHEN** a request arrives at `/DOCS` and no keyword named `docs` is registered
+- **THEN** the resolver MUST fall through to case-folded slug resolution unchanged, and a keyword whose name differs by more than case (e.g. `gh` for `/ghh/…`) MUST NOT match
+
+#### Scenario: Uppercase Keyword Still Rejected At Creation
+
+- **WHEN** an admin submits the keyword form with keyword `GH`
+- **THEN** the form MUST reject it with the existing lowercase-only keyword error; case-insensitivity is a resolution behavior only
 
 ---
 

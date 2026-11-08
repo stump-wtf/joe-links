@@ -97,7 +97,11 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	// Path-based keyword routing: /{keyword}/{slug} on the main server.
 	// The browser extension redirects to {baseURL}/{keyword}/{slug} when the
 	// keyword hostname isn't the server itself (Firefox fallback).
+	// The first segment is matched case-insensitively by the keyword store, so
+	// /GH/x and /gh/x reach the same destination and case never falls through
+	// to the case-folded slug link; the substituted remainder keeps its case.
 	// Governing: SPEC-0008 REQ "Search Interception and Redirect"
+	// Governing: SPEC-0019 REQ "Case-Folded Keyword Matching", ADR-0027
 	parts := strings.SplitN(fullPath, "/", 2)
 	if len(parts) == 2 && parts[1] != "" && parts[0] != host {
 		if kw, err := h.keywords.GetByKeyword(r.Context(), parts[0]); err == nil {
@@ -109,6 +113,9 @@ func (h *ResolveHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Governing: ADR-0011 — check if request host is a registered keyword.
+	// Keyword matching is case-folded, so a host sent in mixed case reaches the
+	// same keyword template (DNS hostnames are case-insensitive).
+	// Governing: SPEC-0019 REQ "Case-Folded Keyword Matching", ADR-0027
 	kw, kwErr := h.keywords.GetByKeyword(r.Context(), host)
 	if kwErr == nil {
 		// Substitute {slug} in the URL template and redirect.

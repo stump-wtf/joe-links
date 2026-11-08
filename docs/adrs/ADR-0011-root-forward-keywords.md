@@ -133,3 +133,6 @@ flowchart TD
   keyword hosts and apply them client-side, enabling `wtf/foo` to navigate correctly without
   needing the `http://` prefix.
 * Related: ADR-0007 (routing), ADR-0005 (data model), ADR-0008 (REST API layer).
+* Amended by ADR-0027 (keyword matching is case-folded): stored keyword names remain lowercase
+  per the rule above, but the lookup folds its candidate, so keyword matching is case-insensitive
+  even though nothing lowercase is ever stored.
