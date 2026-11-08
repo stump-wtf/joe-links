@@ -53,17 +53,36 @@ func newServeCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			oidcProvider, err := auth.NewProvider(ctx, cfg)
-			if err != nil {
-				return err
-			}
-
 			userStore := store.NewUserStore(database)
 			ownershipStore := store.NewOwnershipStore(database)
 			tagStore := store.NewTagStore(database)
 			linkStore := store.NewLinkStore(database, ownershipStore, tagStore)
 			tokenStore := auth.NewSQLTokenStore(database)
 			keywordStore := store.NewKeywordStore(database)
+			credentialStore := store.NewLocalCredentialStore(database)
+
+			// Login-path wiring. OIDC discovery runs only when a provider is
+			// configured, so an instance with none boots instead of failing on
+			// discovery; local mode instead ensures the single administrator
+			// account exists and carries the configured password, so rotating
+			// JOE_ADMIN_PASSWORD takes effect on the next restart.
+			// Governing: SPEC-0001 REQ "Authentication Mode Selection",
+			// "Local Admin Authentication", ADR-0024
+			var oidcProvider *auth.Provider
+			var localAuth *auth.LocalAuthenticator
+			switch cfg.AuthMode() {
+			case config.AuthModeOIDC:
+				oidcProvider, err = auth.NewProvider(ctx, cfg)
+				if err != nil {
+					return err
+				}
+			default:
+				if _, err := auth.EnsureLocalAdmin(ctx, userStore, credentialStore, cfg.AdminUsername, cfg.AdminEmail, cfg.AdminPassword); err != nil {
+					return err
+				}
+				localAuth = auth.NewLocalAuthenticator(userStore, credentialStore, cfg.AdminUsername)
+				log.Printf("auth mode: local — no OIDC provider configured (admin username: %s)", cfg.AdminUsername)
+			}
 
 			// Governing: SPEC-0016 REQ "Click Recording", ADR-0016
 			clickCh := make(chan store.ClickEvent, 256)
@@ -128,6 +147,7 @@ func newServeCmd() *cobra.Command {
 			}
 
 			authHandlers := auth.NewHandlers(oidcProvider, sessionManager, userStore, cfg.AdminEmail, cfg.AdminGroups, cfg.GroupsClaim, !cfg.InsecureCookies)
+			authHandlers.Local = localAuth
 			authMiddleware := auth.NewMiddleware(sessionManager, userStore)
 
 			router := handler.NewRouter(handler.Deps{

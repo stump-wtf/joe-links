@@ -4,11 +4,11 @@
 
 **Joe Links** is a self-hosted "go links" service — a riff on [Go Links](https://www.golinks.io/). It lets authenticated users create short, memorable slugs (e.g., `jira`, `standup`, `onboarding`) that redirect to long URLs. Visiting `https://joe-links.example.com/jira` instantly redirects the browser to whatever URL `jira` maps to. Users manage their own links; admins can manage any link.
 
-The application is a Go-based server-rendered web app using HTMX for hypermedia interactions, DaisyUI/Tailwind for UI, a pluggable relational database backend with versioned migrations, and OIDC-based authentication with local user management and RBAC.
+The application is a Go-based server-rendered web app using HTMX for hypermedia interactions, DaisyUI/Tailwind for UI, a pluggable relational database backend with versioned migrations, and authentication that is OIDC where a provider is configured and a single local admin account where none is, with local user management and RBAC.
 
 All environment variables are prefixed `JOE_`.
 
-See ADR-0001 (Technology Stack), ADR-0002 (Database), ADR-0003 (AuthN/AuthZ), ADR-0004 (CLI Framework).
+See ADR-0001 (Technology Stack), ADR-0002 (Database), ADR-0003 (AuthN/AuthZ), ADR-0024 (optional OIDC, local admin account), ADR-0004 (CLI Framework).
 
 ---
 
@@ -203,13 +203,35 @@ The application MUST use `goose` for versioned schema migrations embedded via `/
 
 ---
 
-### Requirement: OIDC-Only Authentication
+### Requirement: Authentication Mode Selection
 
-The application MUST use OIDC as the sole authentication mechanism. Username/password authentication MUST NOT be implemented. One OIDC provider MUST be configured via `JOE_OIDC_ISSUER`, `JOE_OIDC_CLIENT_ID`, `JOE_OIDC_CLIENT_SECRET`, and `JOE_OIDC_REDIRECT_URL`. OIDC claims MUST be trusted as authoritative.
+The application MUST select its login path from configuration at startup. If any of `JOE_OIDC_ISSUER`, `JOE_OIDC_CLIENT_ID`, `JOE_OIDC_CLIENT_SECRET`, or `JOE_OIDC_REDIRECT_URL` is set, it MUST run in OIDC mode and require the remaining three; OIDC claims MUST be trusted as authoritative, and password authentication MUST NOT be reachable. If none is set, it MUST run in local mode as defined by "Local Admin Authentication". Setting both a provider and `JOE_ADMIN_PASSWORD` MUST fail startup. A deployment that configures a provider MUST behave exactly as it did before local mode existed.
+
+Governing: ADR-0003, ADR-0024.
+
+#### Scenario: OIDC Configured — Discovery at Startup
+
+- **WHEN** the four `JOE_OIDC_*` settings are present
+- **THEN** the application MUST perform OIDC discovery before serving, and MUST exit without starting the HTTP server if discovery fails
+
+#### Scenario: No Provider Configured
+
+- **WHEN** no `JOE_OIDC_*` setting is present and `JOE_ADMIN_PASSWORD` is set
+- **THEN** the application MUST start in local mode and MUST NOT attempt OIDC discovery
+
+#### Scenario: No Login Path Configured
+
+- **WHEN** no `JOE_OIDC_*` setting is present and `JOE_ADMIN_PASSWORD` is unset
+- **THEN** the application MUST exit with an error naming both configuration paths, and MUST NOT start the HTTP server
+
+#### Scenario: Both Paths Configured
+
+- **WHEN** a `JOE_OIDC_*` setting and `JOE_ADMIN_PASSWORD` are both present
+- **THEN** the application MUST exit with an error naming the conflict, because a password beside a working provider is a second, weaker door
 
 #### Scenario: Initiating Login
 
-- **WHEN** an unauthenticated user navigates to a protected route
+- **WHEN** an unauthenticated user navigates to a protected route in OIDC mode
 - **THEN** the application MUST redirect to the OIDC provider's authorization endpoint with a `state` parameter and PKCE `code_challenge`
 
 #### Scenario: Successful OIDC Callback
@@ -226,6 +248,46 @@ The application MUST use OIDC as the sole authentication mechanism. Username/pas
 
 - **WHEN** the ID token fails signature verification or has invalid claims
 - **THEN** the application MUST return `401 Unauthorized`
+
+#### Scenario: Password Sign-In Refused in OIDC Mode
+
+- **WHEN** `POST /auth/login` arrives with credentials in OIDC mode
+- **THEN** the application MUST return `405 Method Not Allowed` and MUST NOT create a session
+
+---
+
+### Requirement: Local Admin Authentication
+
+In local mode the application MUST sign in exactly one local administrator: the account named by `JOE_ADMIN_USERNAME` (default `admin`), authenticated against `JOE_ADMIN_PASSWORD`. The password MUST be at least 12 characters, MUST NOT be stored in plaintext, and MUST be kept as a salted PBKDF2-HMAC-SHA256 hash with self-describing parameters in `local_credentials`, keyed to the `users` row; `users` MUST NOT gain a password column. The account MUST be upserted on every startup as `users(provider='local', subject=<username>)` with role `admin` granted (grant-only, never revoked by startup), so rotating `JOE_ADMIN_PASSWORD` takes effect on the next restart and no stale hash outlives the configuration that set it. The application MUST NOT offer signup, self-registration, or password change in either mode: an instance with no provider serves this one account and no other.
+
+Failed sign-ins MUST be counted per client address as resolved by ADR-0023 (never from an untrusted header), and past 10 failures within 5 minutes the application MUST return `429` with a `Retry-After` header. Every failed attempt MUST report one indistinguishable error, whether the username, the password, or both were wrong. `return_url` on this path MUST be sanitized by the same rule the OIDC callback uses.
+
+Governing: ADR-0024, ADR-0002, ADR-0023.
+
+#### Scenario: First Boot in Local Mode
+
+- **WHEN** the server starts in local mode with no `users` row for the configured username
+- **THEN** the application MUST create it with role `admin`, store a freshly salted hash of `JOE_ADMIN_PASSWORD`, and serve the sign-in form at `GET /auth/login`
+
+#### Scenario: Successful Local Sign-In
+
+- **WHEN** `POST /auth/login` presents the configured username and a password matching the stored hash
+- **THEN** the application MUST renew the session token, store `user_id` and `role`, and redirect to the sanitized `return_url` or `/dashboard`
+
+#### Scenario: Failed Local Sign-In
+
+- **WHEN** `POST /auth/login` presents any other username or password
+- **THEN** the application MUST return `401 Unauthorized` with the same message in every case, MUST NOT create a session, and MUST NOT reveal which half was wrong
+
+#### Scenario: Credential Guessing Is Throttled
+
+- **WHEN** an address has accumulated 10 failed local sign-ins within 5 minutes
+- **THEN** the application MUST return `429` with `Retry-After`, including for a request presenting the correct password
+
+#### Scenario: Rotated Password Takes Effect
+
+- **WHEN** the server restarts with a different `JOE_ADMIN_PASSWORD`
+- **THEN** the stored hash MUST be replaced, and the previous password MUST no longer sign in
 
 ---
 

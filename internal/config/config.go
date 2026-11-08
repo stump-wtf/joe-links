@@ -1,4 +1,5 @@
-// Governing: SPEC-0001 REQ "CLI Entrypoint", "OIDC-Only Authentication", "Server-Side Sessions", ADR-0003, ADR-0004
+// Governing: SPEC-0001 REQ "CLI Entrypoint", "Authentication Mode Selection", "Server-Side Sessions", ADR-0003, ADR-0004
+// Governing: SPEC-0001 REQ "Local Admin Authentication", ADR-0024
 // Governing: SPEC-0017 REQ "LLM Provider Configuration", ADR-0017
 // Governing: SPEC-0021 REQ "Click Retention", ADR-0021
 package config
@@ -27,7 +28,16 @@ type Config struct {
 		ClientSecret string
 		RedirectURL  string
 	}
-	AdminEmail      string
+	AdminEmail string
+	// AdminUsername and AdminPassword select and configure local mode, the
+	// login path for deployments with no OIDC provider (behind an auth proxy,
+	// or a single-operator homelab). AdminUsername defaults to
+	// DefaultAdminUsername; AdminPassword is required in local mode and is
+	// hashed at startup, never stored in plaintext. Both are ignored when OIDC
+	// is configured, and configuring both login paths at once fails startup.
+	// Governing: SPEC-0001 REQ "Local Admin Authentication", ADR-0024
+	AdminUsername   string
+	AdminPassword   string
 	AdminGroups     []string // OIDC group names that grant the admin role
 	GroupsClaim     string   // OIDC claim name containing the user's groups (default: "groups")
 	ShortKeyword    string   // override the short keyword prefix (default: first label of HTTP host)
@@ -64,6 +74,39 @@ type Config struct {
 	}
 }
 
+// Authentication modes selected by configuration (ADR-0024).
+const (
+	// AuthModeOIDC is selected when any JOE_OIDC_* setting is present. All of
+	// them are then required, and no password is ever accepted.
+	AuthModeOIDC = "oidc"
+	// AuthModeLocal is selected when no JOE_OIDC_* setting is present: joe-links
+	// serves with one local administrator account, authenticated against
+	// AdminPassword. Self-registration does not exist in either mode — in local
+	// mode the only account that can sign in is the configured administrator.
+	AuthModeLocal = "local"
+
+	// DefaultAdminUsername is the local-mode administrator username used when
+	// JOE_ADMIN_USERNAME is unset.
+	DefaultAdminUsername = "admin"
+
+	// MinAdminPasswordLength is the floor for JOE_ADMIN_PASSWORD. Local mode is
+	// the login path that may face the internet directly, so a password short
+	// enough to guess online is rejected at startup rather than accepted and
+	// logged in.
+	MinAdminPasswordLength = 12
+)
+
+// AuthMode reports which login path this configuration selects. Any OIDC
+// setting counts as an OIDC deployment: half-configured OIDC is a mistake to
+// fail on, not a reason to fall back to a password nobody meant to enable.
+// Governing: SPEC-0001 REQ "Authentication Mode Selection", ADR-0024
+func (c *Config) AuthMode() string {
+	if c.OIDC.Issuer != "" || c.OIDC.ClientID != "" || c.OIDC.ClientSecret != "" || c.OIDC.RedirectURL != "" {
+		return AuthModeOIDC
+	}
+	return AuthModeLocal
+}
+
 // Load reads config from environment (JOE_ prefix) and optional joe-links.yaml.
 func Load() (*Config, error) {
 	v := viper.New()
@@ -92,6 +135,8 @@ func Load() (*Config, error) {
 	cfg.OIDC.ClientSecret = v.GetString("oidc.client_secret")
 	cfg.OIDC.RedirectURL = v.GetString("oidc.redirect_url")
 	cfg.AdminEmail = v.GetString("admin_email")
+	cfg.AdminUsername = strings.TrimSpace(v.GetString("admin_username"))
+	cfg.AdminPassword = v.GetString("admin_password")
 	cfg.InsecureCookies = v.GetBool("insecure_cookies")
 	if raw := v.GetString("oidc.admin_groups"); raw != "" {
 		for _, g := range strings.Split(raw, ",") {
@@ -185,17 +230,46 @@ func Load() (*Config, error) {
 	if cfg.DB.DSN == "" {
 		return nil, fmt.Errorf("JOE_DB_DSN is required")
 	}
-	if cfg.OIDC.Issuer == "" {
-		return nil, fmt.Errorf("JOE_OIDC_ISSUER is required")
-	}
-	if cfg.OIDC.ClientID == "" {
-		return nil, fmt.Errorf("JOE_OIDC_CLIENT_ID is required")
-	}
-	if cfg.OIDC.ClientSecret == "" {
-		return nil, fmt.Errorf("JOE_OIDC_CLIENT_SECRET is required")
-	}
-	if cfg.OIDC.RedirectURL == "" {
-		return nil, fmt.Errorf("JOE_OIDC_REDIRECT_URL is required")
+
+	// Login-path selection. OIDC stays the documented default path and its
+	// requirements are unchanged; local mode is the opt-in for deployments with
+	// no provider. Neither mode may be half-configured, and running both is
+	// refused: a password beside a working IdP would be a second, weaker door
+	// the operator did not choose.
+	// Governing: SPEC-0001 REQ "Authentication Mode Selection", ADR-0024
+	switch cfg.AuthMode() {
+	case AuthModeOIDC:
+		if cfg.OIDC.Issuer == "" {
+			return nil, fmt.Errorf("JOE_OIDC_ISSUER is required: another JOE_OIDC_* setting is configured, and joe-links will not start with a partial OIDC setup")
+		}
+		if cfg.OIDC.ClientID == "" {
+			return nil, fmt.Errorf("JOE_OIDC_CLIENT_ID is required")
+		}
+		if cfg.OIDC.ClientSecret == "" {
+			return nil, fmt.Errorf("JOE_OIDC_CLIENT_SECRET is required")
+		}
+		if cfg.OIDC.RedirectURL == "" {
+			return nil, fmt.Errorf("JOE_OIDC_REDIRECT_URL is required")
+		}
+		if cfg.AdminPassword != "" {
+			return nil, fmt.Errorf("JOE_ADMIN_PASSWORD is ignored while OIDC is configured: remove it, or remove the JOE_OIDC_* settings to run in local mode")
+		}
+	default:
+		if cfg.AdminUsername == "" {
+			cfg.AdminUsername = DefaultAdminUsername
+		}
+		if cfg.AdminPassword == "" {
+			return nil, fmt.Errorf("no login path is configured: set JOE_OIDC_ISSUER, JOE_OIDC_CLIENT_ID, JOE_OIDC_CLIENT_SECRET and JOE_OIDC_REDIRECT_URL for OIDC sign-in, or JOE_ADMIN_PASSWORD (optionally with JOE_ADMIN_USERNAME, default %q) for a local admin account", DefaultAdminUsername)
+		}
+		if len(cfg.AdminPassword) < MinAdminPasswordLength {
+			return nil, fmt.Errorf("JOE_ADMIN_PASSWORD must be at least %d characters: local mode serves with this one account, and joe-links may be reachable from the internet", MinAdminPasswordLength)
+		}
+		if strings.ContainsAny(cfg.AdminUsername, " \t\n@") {
+			return nil, fmt.Errorf("invalid JOE_ADMIN_USERNAME %q: use a plain name without spaces or @", cfg.AdminUsername)
+		}
+		if cfg.AdminEmail == "" {
+			cfg.AdminEmail = cfg.AdminUsername + "@local"
+		}
 	}
 
 	return cfg, nil

@@ -22,6 +22,15 @@ oidc:
 # Your email must match a staticPasswords entry in dev/dex.yaml to get admin role.
 admin_email: admin@example.com
 
+# --- Local admin login (alternative to OIDC, ADR-0024) ---
+# Comment out the whole oidc block above and uncomment these to run with no
+# identity provider: joe-links then serves a sign-in form for this one admin
+# account. Setting a password beside a configured provider is a startup error.
+# The password is stored only as a salted PBKDF2-HMAC-SHA256 hash, and is
+# re-derived from here on every startup, so changing it here changes it.
+# admin_username: admin          # JOE_ADMIN_USERNAME (default: admin)
+# admin_password: change-me-please-12-chars   # JOE_ADMIN_PASSWORD (min 12)
+
 # Disable Secure flag on cookies so sessions work over plain HTTP locally.
 insecure_cookies: true
 

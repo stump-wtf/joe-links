@@ -1,0 +1,37 @@
+{{template "base" .}}
+
+{{define "title"}}Sign in — Joe Links{{end}}
+
+{{define "content"}}
+<!-- Governing: SPEC-0001 REQ "Local Admin Authentication", ADR-0024 -->
+<div class="hero min-h-[60vh]">
+    <div class="hero-content">
+        <div class="card w-full max-w-sm shadow-lg bg-base-100">
+            <div class="card-body">
+                <h1 class="text-2xl font-bold">Sign in</h1>
+                <p class="text-base-content/60 text-sm">
+                    This instance runs without an OIDC provider, so it signs in
+                    with the local admin account.
+                </p>
+                {{if .Failure}}
+                <div class="alert alert-error text-sm">{{.Failure}}</div>
+                {{end}}
+                <form method="post" action="/auth/login" class="space-y-4 mt-2">
+                    <input type="hidden" name="return_url" value="{{.ReturnURL}}">
+                    <label class="form-control w-full">
+                        <span class="label-text mb-1">Username</span>
+                        <input type="text" name="username" autocomplete="username"
+                               required class="input input-bordered w-full">
+                    </label>
+                    <label class="form-control w-full">
+                        <span class="label-text mb-1">Password</span>
+                        <input type="password" name="password" autocomplete="current-password"
+                               required class="input input-bordered w-full">
+                    </label>
+                    <button type="submit" class="btn btn-primary w-full">Sign in</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}

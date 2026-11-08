@@ -1,4 +1,4 @@
-// Governing: SPEC-0001 REQ "OIDC-Only Authentication", ADR-0003
+// Governing: SPEC-0001 REQ "Authentication Mode Selection", ADR-0003, ADR-0024
 package auth
 
 import (

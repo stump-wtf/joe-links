@@ -264,3 +264,127 @@ func TestTrustedProxies_YAMLListNormalizedToCIDRs(t *testing.T) {
 		}
 	}
 }
+
+// clearOIDCEnv unsets the OIDC settings so a test can exercise local mode.
+func clearOIDCEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"JOE_OIDC_ISSUER", "JOE_OIDC_CLIENT_ID", "JOE_OIDC_CLIENT_SECRET", "JOE_OIDC_REDIRECT_URL"} {
+		t.Setenv(k, "")
+	}
+}
+
+func setLocalModeEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("JOE_DB_DRIVER", "sqlite3")
+	t.Setenv("JOE_DB_DSN", ":memory:")
+	clearOIDCEnv(t)
+}
+
+func TestAuthMode_OIDCWhenConfigured(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AuthMode() != AuthModeOIDC {
+		t.Errorf("AuthMode() = %q, want %q", cfg.AuthMode(), AuthModeOIDC)
+	}
+}
+
+func TestAuthMode_LocalNeedsOnlyAdminPassword(t *testing.T) {
+	setLocalModeEnv(t)
+	t.Setenv("JOE_ADMIN_PASSWORD", "a-long-enough-password")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AuthMode() != AuthModeLocal {
+		t.Errorf("AuthMode() = %q, want %q", cfg.AuthMode(), AuthModeLocal)
+	}
+	if cfg.AdminUsername != DefaultAdminUsername {
+		t.Errorf("AdminUsername = %q, want the default %q", cfg.AdminUsername, DefaultAdminUsername)
+	}
+	if cfg.AdminEmail != "admin@local" {
+		t.Errorf("AdminEmail = %q, want the local default admin@local", cfg.AdminEmail)
+	}
+}
+
+func TestAuthMode_LocalHonorsCustomAdmin(t *testing.T) {
+	setLocalModeEnv(t)
+	t.Setenv("JOE_ADMIN_USERNAME", "  joestump  ")
+	t.Setenv("JOE_ADMIN_PASSWORD", "a-long-enough-password")
+	t.Setenv("JOE_ADMIN_EMAIL", "joe@example.com")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AdminUsername != "joestump" {
+		t.Errorf("AdminUsername = %q, want the trimmed joestump", cfg.AdminUsername)
+	}
+	if cfg.AdminEmail != "joe@example.com" {
+		t.Errorf("AdminEmail = %q, want the configured address", cfg.AdminEmail)
+	}
+}
+
+func TestAuthMode_FailsWhenNeitherPathIsConfigured(t *testing.T) {
+	setLocalModeEnv(t)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load succeeded with no login path configured, want a startup failure")
+	}
+	for _, want := range []string{"JOE_OIDC_ISSUER", "JOE_ADMIN_PASSWORD", DefaultAdminUsername} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+}
+
+func TestAuthMode_FailsOnGuessableAdminPassword(t *testing.T) {
+	setLocalModeEnv(t)
+	t.Setenv("JOE_ADMIN_PASSWORD", "shorty")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("Load succeeded with a %d-character admin password, want a startup failure", len("shorty"))
+	}
+}
+
+func TestAuthMode_FailsOnMalformedAdminUsername(t *testing.T) {
+	setLocalModeEnv(t)
+	t.Setenv("JOE_ADMIN_USERNAME", "joe@example.com")
+	t.Setenv("JOE_ADMIN_PASSWORD", "a-long-enough-password")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load succeeded with an email address as the username, want a startup failure")
+	}
+}
+
+func TestAuthMode_FailsOnPartialOIDCConfig(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("JOE_OIDC_CLIENT_SECRET", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load succeeded with a partial OIDC setup, want a startup failure")
+	}
+	if !strings.Contains(err.Error(), "JOE_OIDC_CLIENT_SECRET") {
+		t.Errorf("error %q does not name the missing setting", err)
+	}
+}
+
+// Both login paths at once is refused: beside a working provider a password
+// would be a second, weaker door the operator never chose.
+func TestAuthMode_FailsWhenBothPathsAreConfigured(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("JOE_ADMIN_PASSWORD", "a-long-enough-password")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load succeeded with OIDC and a local admin password, want a startup failure")
+	}
+	if !strings.Contains(err.Error(), "JOE_ADMIN_PASSWORD") {
+		t.Errorf("error %q does not name the conflicting setting", err)
+	}
+}

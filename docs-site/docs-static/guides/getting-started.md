@@ -42,17 +42,26 @@ volumes:
 JOE_DB_DRIVER=sqlite3
 JOE_DB_DSN=/data/joe-links.db
 
-# OIDC Authentication (required — see provider examples below)
+# Authentication — pick ONE of the two options below.
+#
+# Option A: OIDC (delegated sign-in for many users — see provider examples below)
 JOE_OIDC_ISSUER=
 JOE_OIDC_CLIENT_ID=
 JOE_OIDC_CLIENT_SECRET=
 JOE_OIDC_REDIRECT_URL=https://go.example.com/auth/callback
+#
+# Option B: no provider — sign in with one local admin account
+# (see "Running without an OIDC provider" below)
+# JOE_ADMIN_USERNAME=admin
+# JOE_ADMIN_PASSWORD=at-least-12-characters
 
-# Admin — this email gets the admin role on first login
+# Admin — this email gets the admin role on first login (OIDC mode)
 JOE_ADMIN_EMAIL=you@example.com
 ```
 
-4. Fill in the OIDC fields (see [OIDC Setup](#oidc-setup) below), then start the service:
+4. Fill in either the OIDC fields (see [OIDC Setup](#oidc-setup) below) or the local
+   admin password (see [Running without an OIDC provider](#running-without-an-oidc-provider)),
+   then start the service:
 
 ```bash
 docker compose up -d
